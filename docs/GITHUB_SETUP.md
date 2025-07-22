@@ -6,7 +6,7 @@
 
 1. Go to [GitHub](https://github.com) and sign in
 2. Click "New repository"
-3. Repository name: `proxmox-smb-gateway`
+3. Repository name: `pve-smb-gateway`
 4. Description: `Proxmox VE plugin for GUI-managed SMB/CIFS gateway with dual licensing`
 5. Make it **Public**
 6. **Don't** initialize with README (we already have one)
@@ -16,7 +16,7 @@
 
 ```bash
 # Add the remote origin
-git remote add origin https://github.com/ZippyNetworks/proxmox-smb-gateway.git
+git remote add origin https://github.com/ZippyNetworks/pve-smb-gateway.git
 
 # Push the main branch
 git push -u origin master
@@ -47,11 +47,11 @@ git push origin v0.1.0
 
 1. Go to Releases → "Create a new release"
 2. Tag: `v0.1.0`
-3. Title: `Proxmox SMB Gateway v0.1.0 - Initial Release`
+3. Title: `PVE SMB Gateway v0.1.0 - Initial Release`
 4. Description:
 
 ```markdown
-## 🎉 Initial Release - Proxmox SMB Gateway v0.1.0
+## 🎉 Initial Release - PVE SMB Gateway v0.1.0
 
 ### Features
 - ✅ **Complete SMB Gateway Plugin**: LXC and Native deployment modes
@@ -65,7 +65,7 @@ git push origin v0.1.0
 ### Installation
 ```bash
 # Download and install
-wget https://github.com/ZippyNetworks/proxmox-smb-gateway/releases/download/v0.1.0/pve-plugin-smbgateway_0.1.0-1_all.deb
+wget https://github.com/ZippyNetworks/pve-smb-gateway/releases/download/v0.1.0/pve-plugin-smbgateway_0.1.0-1_all.deb
 sudo dpkg -i pve-plugin-smbgateway_0.1.0-1_all.deb
 sudo systemctl restart pveproxy
 ```
@@ -94,7 +94,7 @@ pve-smbgateway status myshare
 
 ### Support
 - **Maintainer**: Eric Henderson <eric@gozippy.com>
-- **Issues**: [GitHub Issues](https://github.com/ZippyNetworks/proxmox-smb-gateway/issues)
+- **Issues**: [GitHub Issues](https://github.com/ZippyNetworks/pve-smb-gateway/issues)
 - **Documentation**: [docs/](docs/)
 
 ### Roadmap
@@ -192,13 +192,13 @@ Brief description of changes
 #### Proxmox Forum Post
 Post in the [Proxmox Community Forum](https://forum.proxmox.com/):
 
-**Subject**: `[ANNOUNCEMENT] Proxmox SMB Gateway Plugin v0.1.0 - GUI-managed SMB shares`
+**Subject**: `[ANNOUNCEMENT] PVE SMB Gateway Plugin v0.1.0 - GUI-managed SMB shares`
 
 **Content**:
 ```
 Hello Proxmox Community!
 
-I'm excited to announce the initial release of the Proxmox SMB Gateway plugin - a GUI-managed way to export SMB/CIFS shares from your Proxmox storage backends without needing a full NAS VM.
+I'm excited to announce the initial release of the PVE SMB Gateway plugin - a GUI-managed way to export SMB/CIFS shares from your Proxmox storage backends without needing a full NAS VM.
 
 **Key Features:**
 - One-click share creation via web interface
@@ -210,13 +210,13 @@ I'm excited to announce the initial release of the Proxmox SMB Gateway plugin - 
 
 **Quick Start:**
 ```bash
-wget https://github.com/ZippyNetworks/proxmox-smb-gateway/releases/download/v0.1.0/pve-plugin-smbgateway_0.1.0-1_all.deb
+wget https://github.com/ZippyNetworks/pve-smb-gateway/releases/download/v0.1.0/pve-plugin-smbgateway_0.1.0-1_all.deb
 sudo dpkg -i pve-plugin-smbgateway_0.1.0-1_all.deb
 sudo systemctl restart pveproxy
 ```
 
-**Repository:** https://github.com/ZippyNetworks/proxmox-smb-gateway
-**Documentation:** https://github.com/ZippyNetworks/proxmox-smb-gateway/tree/main/docs
+**Repository:** https://github.com/ZippyNetworks/pve-smb-gateway
+**Documentation:** https://github.com/ZippyNetworks/pve-smb-gateway/tree/main/docs
 
 The plugin is dual-licensed - free for community use under AGPL-3.0, with commercial licensing available for enterprise deployments.
 

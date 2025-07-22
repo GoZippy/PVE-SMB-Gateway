@@ -1,4 +1,4 @@
-# Product‑Requirements Document – Proxmox SMB Gateway
+# Product‑Requirements Document – PVE SMB Gateway
 
 | **Document owner** | Eric Henderson (Zippy Technologies) |
 |--------------------|-------------------------------------|

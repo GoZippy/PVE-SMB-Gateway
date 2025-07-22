@@ -1,6 +1,6 @@
 #!/usr/bin/env perl
 
-# Proxmox SMB Gateway CLI Tool
+# PVE SMB Gateway CLI Tool
 # Copyright (C) 2025 Eric Henderson <eric@gozippy.com>
 # Dual-licensed under AGPL-3.0 and Commercial License
 #

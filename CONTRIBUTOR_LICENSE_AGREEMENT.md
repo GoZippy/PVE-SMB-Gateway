@@ -1,14 +1,14 @@
 # Contributor License Agreement
 
-## Proxmox SMB Gateway Project
+## PVE SMB Gateway Project
 
-Thank you for your interest in contributing to the Proxmox SMB Gateway project. This Contributor License Agreement ("CLA") establishes the terms under which you grant us the rights to your contributions.
+Thank you for your interest in contributing to the PVE SMB Gateway project. This Contributor License Agreement ("CLA") establishes the terms under which you grant us the rights to your contributions.
 
 ## 1. Definitions
 
 - **"You"** (or "Your") shall mean the copyright owner or legal entity authorized by the copyright owner that is making a Contribution to the Project.
 - **"Contribution"** shall mean any original work of authorship, including any modifications or additions to an existing work, that is intentionally submitted by You to the Project for inclusion in, or documentation of, any of the products owned or managed by the Project.
-- **"Project"** shall mean the Proxmox SMB Gateway project and any of its associated repositories.
+- **"Project"** shall mean the PVE SMB Gateway project and any of its associated repositories.
 - **"Us"** (or "Our") shall mean Eric Henderson and Zippy Technologies LLC, the copyright holders of the Project.
 
 ## 2. Grant of Copyright License
@@ -67,7 +67,7 @@ This Agreement constitutes the entire agreement between You and Us concerning th
 
 If you have any questions about this CLA, please contact:
 - **Email**: eric@gozippy.com
-- **Subject**: "CLA Question - Proxmox SMB Gateway"
+- **Subject**: "CLA Question - PVE SMB Gateway"
 
 ---
 

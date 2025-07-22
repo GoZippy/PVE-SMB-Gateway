@@ -1,4 +1,4 @@
-# Roadmap – Proxmox SMB Gateway
+# Roadmap – PVE SMB Gateway
 
 ## Current Status (v0.1.0)
 
@@ -66,7 +66,7 @@
 ## Folder Structure (Future)
 
 ```
-proxmox-smb-gateway/
+pve-smb-gateway/
 │
 ├─ templates/                    # Service templates
 │   ├─ truenas-scale.yml

@@ -1,8 +1,8 @@
-# Proxmox SMB Gateway v0.1.0 - Release Summary
+# PVE SMB Gateway v0.1.0 - Release Summary
 
 ## 🎉 Initial Release Complete!
 
-The Proxmox SMB Gateway plugin is now ready for its initial release. This document summarizes what has been built and the next steps.
+The PVE SMB Gateway plugin is now ready for its initial release. This document summarizes what has been built and the next steps.
 
 ## ✅ What's Been Built
 
@@ -64,7 +64,7 @@ The Proxmox SMB Gateway plugin is now ready for its initial release. This docume
 
 ### **Repository Structure**
 ```
-proxmox-smb-gateway/
+pve-smb-gateway/
 ├── PVE/Storage/Custom/SMBGateway.pm    # Main plugin
 ├── www/ext6/pvemanager6/smb-gateway.js # ExtJS wizard
 ├── sbin/pve-smbgateway                 # CLI tool
@@ -168,12 +168,12 @@ proxmox-smb-gateway/
 ## 📞 Contact & Support
 
 - **Maintainer**: Eric Henderson <eric@gozippy.com>
-- **Repository**: https://github.com/ZippyNetworks/proxmox-smb-gateway
-- **Documentation**: https://github.com/ZippyNetworks/proxmox-smb-gateway/tree/main/docs
+- **Repository**: https://github.com/ZippyNetworks/pve-smb-gateway
+- **Documentation**: https://github.com/ZippyNetworks/pve-smb-gateway/tree/main/docs
 - **Commercial Licensing**: See docs/COMMERCIAL_LICENSE.md
 
 ---
 
-**The Proxmox SMB Gateway project is now ready to make its mark on the Proxmox ecosystem!** 🚀
+**The PVE SMB Gateway project is now ready to make its mark on the Proxmox ecosystem!** 🚀
 
 *This release represents months of planning and development, resulting in a professional-grade plugin that serves both community and commercial needs.* 

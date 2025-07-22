@@ -1,8 +1,8 @@
-# Proxmox SMB Gateway - Commercial License
+# PVE SMB Gateway - Commercial License
 
 ## Overview
 
-Proxmox SMB Gateway is dual-licensed under the GNU Affero General Public License v3.0 (AGPL-3.0) and this Commercial License.
+PVE SMB Gateway is dual-licensed under the GNU Affero General Public License v3.0 (AGPL-3.0) and this Commercial License.
 
 - **Community Edition**: Available under AGPL-3.0 for personal, educational, and non-commercial use
 - **Commercial Edition**: Available under this Commercial License for commercial distribution, OEM bundling, and enterprise use
@@ -13,7 +13,7 @@ Proxmox SMB Gateway is dual-licensed under the GNU Affero General Public License
 
 This Commercial License grants you the right to:
 
-1. **Redistribute** the Proxmox SMB Gateway binaries without releasing source code modifications
+1. **Redistribute** the PVE SMB Gateway binaries without releasing source code modifications
 2. **Bundle** the software in commercial appliances, distributions, or products
 3. **Resell** the software as part of commercial offerings
 4. **Use** in commercial environments without AGPL-3.0 copyleft obligations
@@ -107,12 +107,12 @@ This license terminates automatically if you fail to comply with its terms. Upon
 
 **For Commercial Licensing:**
 - **Email**: eric@gozippy.com
-- **Subject**: "Commercial License Inquiry - Proxmox SMB Gateway"
+- **Subject**: "Commercial License Inquiry - PVE SMB Gateway"
 - **Response Time**: Within 24 hours
 
 **For Technical Support:**
 - **Email**: eric@gozippy.com
-- **Subject**: "Support - Proxmox SMB Gateway"
+- **Subject**: "Support - PVE SMB Gateway"
 - **Response Time**: 2 business days
 
 ## FAQ

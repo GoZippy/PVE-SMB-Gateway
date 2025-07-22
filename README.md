@@ -1,4 +1,4 @@
-# Proxmox SMB Gateway Plugin
+# PVE SMB Gateway Plugin
 
 A Proxmox Virtual Environment (PVE) plugin that provides a GUI-managed, lightweight way to export SMB/CIFS shares from existing Proxmox storage backends (ZFS datasets, CephFS subvolumes, or RBD images) without forcing users to maintain a full NAS VM.
 
@@ -30,8 +30,8 @@ A Proxmox Virtual Environment (PVE) plugin that provides a GUI-managed, lightwei
 
 ```bash
 # Clone the repository
-git clone https://github.com/ZippyNetworks/proxmox-smb-gateway.git
-cd proxmox-smb-gateway
+git clone https://github.com/ZippyNetworks/pve-smb-gateway.git
+cd pve-smb-gateway
 
 # Build and install
 ./scripts/build_package.sh
@@ -79,7 +79,7 @@ make install
 ### Project Structure
 
 ```
-proxmox-smb-gateway/
+pve-smb-gateway/
 ├── PVE/Storage/Custom/SMBGateway.pm  # Main Perl plugin
 ├── www/ext6/pvemanager6/smb-gateway.js  # ExtJS wizard
 ├── scripts/
@@ -233,7 +233,7 @@ For commercial licensing inquiries, contact: eric@gozippy.com
 ## Support
 
 - **Maintainer**: Eric Henderson <eric@gozippy.com>
-- **Issues**: [GitHub Issues](https://github.com/ZippyNetworks/proxmox-smb-gateway/issues)
+- **Issues**: [GitHub Issues](https://github.com/ZippyNetworks/pve-smb-gateway/issues)
 - **Documentation**: [docs/](docs/)
 - **Community**: Proxmox forum thread (coming soon)
 

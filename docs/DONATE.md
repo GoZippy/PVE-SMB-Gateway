@@ -1,4 +1,4 @@
-# Support the Proxmox SMB Gateway Project
+# Support the PVE SMB Gateway Project
 
 We ❤️ building open-source tools. If this gateway saves you time or money,  
 consider buying the team a coffee—or a rack server's worth of coffee ☕.

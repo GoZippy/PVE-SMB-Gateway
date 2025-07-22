@@ -8,4 +8,4 @@ Build-Depends: debhelper-compat (= 13), perl, pve-manager (>= 8.0)
 Package: pve-plugin-smbgateway
 Architecture: all
 Depends: ${misc:Depends}, samba, pve-manager (>= 8.0)
-Description: Proxmox VE storage plugin to export ZFS/Ceph pools via SMB using native/LXC/VM gateways.
+Description: PVE storage plugin to export ZFS/Ceph pools via SMB using native/LXC/VM gateways.

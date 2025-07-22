@@ -1,6 +1,6 @@
 package PVE::Storage::Custom::SMBGateway;
 
-# Proxmox SMB Gateway Plugin
+# PVE SMB Gateway Plugin
 # Copyright (C) 2025 Eric Henderson <eric@gozippy.com>
 # Dual-licensed under AGPL-3.0 and Commercial License
 #
