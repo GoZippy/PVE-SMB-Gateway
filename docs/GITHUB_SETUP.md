@@ -190,15 +190,17 @@ Brief description of changes
 ### 8. Community Outreach
 
 #### Proxmox Forum Post
-Post in the [Proxmox Community Forum](https://forum.proxmox.com/):
+Update the existing [Proxmox Community Forum thread](https://forum.proxmox.com/threads/feature-proposal-lightweight-%E2%80%9Csmb-gateway%E2%80%9D-add%E2%80%91on-for-proxmox%E2%80%AFve-gui%E2%80%91managed-native-lxc-vm-options.168750/) with the release announcement:
 
-**Subject**: `[ANNOUNCEMENT] PVE SMB Gateway Plugin v0.1.0 - GUI-managed SMB shares`
+**Subject**: `[RELEASE] PVE SMB Gateway Plugin v0.1.0 - GUI-managed SMB shares`
 
 **Content**:
 ```
 Hello Proxmox Community!
 
 I'm excited to announce the initial release of the PVE SMB Gateway plugin - a GUI-managed way to export SMB/CIFS shares from your Proxmox storage backends without needing a full NAS VM.
+
+This is the implementation of the feature proposal I shared earlier in this thread.
 
 **Key Features:**
 - One-click share creation via web interface

@@ -235,7 +235,7 @@ For commercial licensing inquiries, contact: eric@gozippy.com
 - **Maintainer**: Eric Henderson <eric@gozippy.com>
 - **Issues**: [GitHub Issues](https://github.com/ZippyNetworks/pve-smb-gateway/issues)
 - **Documentation**: [docs/](docs/)
-- **Community**: Proxmox forum thread (coming soon)
+- **Community**: [Proxmox Forum Discussion](https://forum.proxmox.com/threads/feature-proposal-lightweight-%E2%80%9Csmb-gateway%E2%80%9D-add%E2%80%91on-for-proxmox%E2%80%AFve-gui%E2%80%91managed-native-lxc-vm-options.168750/)
 
 ---
 
