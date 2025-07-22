@@ -1,0 +1,10 @@
+pve-plugin-smbgateway (0.1.0-1) unstable; urgency=medium
+
+  * Initial release with LXC and native mode support
+  * Complete ExtJS wizard with validation
+  * CLI management tools (pve-smbgateway)
+  * Error handling and rollback capabilities
+  * Quota and AD integration support
+  * Comprehensive documentation and examples
+
+ -- Eric Henderson <eric@gozippy.com>  Tue, 22 Jul 2025 12:00:00 -0500 

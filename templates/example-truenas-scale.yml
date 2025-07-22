@@ -1,0 +1,105 @@
+# Example TrueNAS SCALE template for future Phase 2 implementation
+# This file demonstrates the YAML template format for the Storage Service Launcher
+
+name: "TrueNAS SCALE"
+description: "Enterprise-grade NAS with ZFS, SMB, NFS, and iSCSI support"
+version: "1.0.0"
+author: "Eric Henderson <eric@gozippy.com>"
+category: "Storage"
+tags: ["nas", "zfs", "enterprise", "ha"]
+
+# Service type and deployment
+type: vm
+source_image: "https://download.truenas.com/TrueNAS-SCALE-Bluefin/22.12.4.1/x64/TrueNAS-SCALE-22.12.4.1.iso"
+source_checksum: "sha256:abc123..."
+
+# Resource requirements
+resources:
+  cpu: 2
+  memory: 4096
+  disk_min: 40G
+  network: true
+
+# Storage configuration
+disks:
+  - type: virtio
+    size: 40G
+    description: "System disk"
+  - type: passthrough
+    pool: "cephssd"
+    description: "Data storage (optional)"
+
+# Network configuration
+network:
+  bridge: "vmbr0"
+  ip: "dhcp"
+  ports:
+    - {guest: 22, protocol: ssh, description: "SSH Access"}
+    - {guest: 80, protocol: http, description: "HTTP (redirects to HTTPS)"}
+    - {guest: 443, protocol: https, description: "Web UI"}
+    - {guest: 139, protocol: smb, description: "SMB/CIFS"}
+    - {guest: 445, protocol: smb, description: "SMB/CIFS (direct)"}
+    - {guest: 111, protocol: nfs, description: "NFS"}
+    - {guest: 2049, protocol: nfs, description: "NFS (direct)"}
+    - {guest: 3260, protocol: iscsi, description: "iSCSI"}
+
+# Post-installation setup
+postinstall:
+  - name: "Configure TrueNAS"
+    command: "qm guest exec {{vmid}} -- bash -c 'truenas-setup --dataset {{dataset}} --hostname {{hostname}}'"
+  - name: "Set admin password"
+    command: "qm guest exec {{vmid}} -- bash -c 'echo \"{{admin_password}}\" | truenas-setup-password'"
+  - name: "Configure network"
+    command: "qm guest exec {{vmid}} -- bash -c 'truenas-network --ip {{ip}} --netmask {{netmask}} --gateway {{gateway}}'"
+
+# High availability configuration
+ha:
+  level: "recommended"
+  description: "TrueNAS SCALE supports clustering and failover"
+  requirements:
+    - "Minimum 2 nodes for HA"
+    - "Shared storage (CephFS recommended)"
+    - "Network connectivity between nodes"
+
+# Monitoring and metrics
+monitoring:
+  exporter: "node"
+  ports:
+    - 9100
+  metrics:
+    - "truenas_system_uptime"
+    - "truenas_pool_usage"
+    - "truenas_network_throughput"
+
+# Security considerations
+security:
+  notes:
+    - "Change default admin password immediately"
+    - "Configure firewall rules for exposed services"
+    - "Enable SSL/TLS for web interface"
+    - "Use strong passwords for SMB/NFS shares"
+
+# Backup and recovery
+backup:
+  strategy: "snapshot"
+  retention: "30 days"
+  location: "{{backup_pool}}"
+
+# Dependencies
+dependencies:
+  - "cephfs"  # Optional, for shared storage
+  - "zfs"     # Required for local storage
+
+# Validation rules
+validation:
+  min_cpu: 2
+  min_memory: 4096
+  min_disk: 40G
+  required_ports: [22, 443]
+  optional_ports: [80, 139, 445, 111, 2049, 3260]
+
+# Documentation links
+docs:
+  official: "https://www.truenas.com/docs/scale/"
+  community: "https://www.truenas.com/community/"
+  github: "https://github.com/truenas/scale" 

@@ -1,0 +1,46 @@
+name: Build and Test Package
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up build environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential devscripts perltidy perlcritic
+        sudo apt-get install -y libtest-mockmodule-perl libtest-more-perl
+    
+    - name: Lint Perl code
+      run: |
+        perltidy -q -i=4 PVE/Storage/Custom/SMBGateway.pm
+        perlcritic -1 PVE/Storage/Custom/SMBGateway.pm
+    
+    - name: Run unit tests
+      run: |
+        perl t/00-load.t
+        perl t/10-create-share.t
+    
+    - name: Build package
+      run: |
+        ./scripts/build_package.sh
+    
+    - name: Check package contents
+      run: |
+        dpkg-deb -I ../pve-plugin-smbgateway_*.deb
+        dpkg-deb -c ../pve-plugin-smbgateway_*.deb
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: pve-plugin-smbgateway
+        path: ../pve-plugin-smbgateway_*.deb
+        retention-days: 30 

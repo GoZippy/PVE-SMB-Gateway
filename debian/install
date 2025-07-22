@@ -1,0 +1,3 @@
+PVE/Storage/Custom/SMBGateway.pm usr/share/perl5/PVE/Storage/Custom/
+www/ext6/pvemanager6/smb-gateway.js usr/share/pve-manager/ext6/pvemanager6/
+scripts/lxc_setup.sh usr/share/pve-smbgateway/ 
