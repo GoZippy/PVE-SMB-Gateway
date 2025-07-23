@@ -5,7 +5,7 @@ consider buying the team a coffee—or a rack server's worth of coffee ☕.
 
 | Asset | Address | Notes |
 |-------|---------|-------|
-| **BTC** | `bc1qexample...` | on-chain SegWit |
+| **BTC** | `bc1qts6kmeezwf3gmqn26vjmpyvg3j9ntj8yhjmp9q` | on-chain SegWit |
 | **ETH** | `0x2caE2C49221f5Da0D790274388A7c9Ce49FdEb41` | ERC-20 compatible |
 | **USDT** *(ERC-20)* | `0x2caE2C49221f5Da0D790274388A7c9Ce49FdEb41` | |
 | **BTG** | `Gexample...` | Bitcoin Gold |
