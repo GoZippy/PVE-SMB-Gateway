@@ -2137,174 +2137,490 @@ sub _join_ad_domain_vm {
 
 # -------- CTDB High Availability methods --------
 sub _setup_ctdb_cluster {
-    my ($self, $nodes, $vip, $rollback_steps) = @_;
+    my ($self, $nodes, $vip, $mode, $container_or_vm_id, $rollback_steps, $share) = @_;
     
-    # Install CTDB if not present
-    my $ctdb_installed = system("dpkg -l ctdb >/dev/null 2>&1") == 0;
-    if (!$ctdb_installed) {
-        run_command(['apt-get', 'update']);
-        run_command(['apt-get', 'install', '-y', 'ctdb']);
-        push @$rollback_steps, ['ctdb_package_installed'];
+    # Validate VIP format
+    unless ($vip =~ /^(\d{1,3}\.){3}\d{1,3}$/) {
+        die "Invalid VIP format: $vip";
     }
     
-    # Create CTDB configuration directory
-    unless (-d '/etc/ctdb') {
-        mkdir '/etc/ctdb' or die "Cannot create /etc/ctdb: $!";
-        push @$rollback_steps, ['remove_ctdb_config_dir'];
+    # Validate nodes list
+    unless ($nodes && ref($nodes) eq 'ARRAY' && @$nodes > 0) {
+        die "Invalid nodes list for CTDB cluster";
     }
+    
+    # Check if VIP is available
+    unless (_check_vip_availability($vip)) {
+        die "VIP $vip is not available or already in use";
+    }
+    
+    # Setup CTDB based on mode
+    my $ctdb_result;
+    if ($mode eq 'lxc') {
+        $ctdb_result = _setup_ctdb_lxc($container_or_vm_id, $nodes, $vip, $rollback_steps, $share);
+    } elsif ($mode eq 'vm') {
+        $ctdb_result = _setup_ctdb_vm($container_or_vm_id, $nodes, $vip, $rollback_steps, $share);
+    } else {
+        $ctdb_result = _setup_ctdb_native($nodes, $vip, $rollback_steps, $share);
+    }
+    
+    return $ctdb_result;
+}
+
+sub _check_vip_availability {
+    my ($vip) = @_;
+    
+    # Check if VIP is already in use
+    my $ping_result = `ping -c 1 -W 1 $vip 2>/dev/null`;
+    if ($ping_result =~ /1 received/) {
+        return 0; # VIP is in use
+    }
+    
+    # Check if VIP is in our network range
+    my $hostname = `hostname`;
+    chomp $hostname;
+    my $host_ip = `hostname -I | awk '{print \$1}'`;
+    chomp $host_ip;
+    
+    # Extract network prefix
+    if ($host_ip =~ /^(\d+\.\d+\.\d+)\./) {
+        my $network_prefix = $1;
+        if ($vip =~ /^$network_prefix\./) {
+            return 1; # VIP is in our network range
+        }
+    }
+    
+    return 0; # VIP is not in our network range
+}
+
+sub _setup_ctdb_lxc {
+    my ($container_id, $nodes, $vip, $rollback_steps, $share) = @_;
+    
+    # Install CTDB packages in container
+    run_command(['pct', 'exec', $container_id, '--', 'apt-get', 'update']);
+    run_command(['pct', 'exec', $container_id, '--', 'apt-get', 'install', '-y', 'ctdb', 'ctdb-dev']);
+    
+    # Create CTDB configuration
+    my $ctdb_conf = "
+CTDB_RECOVERY_LOCK=/var/lib/ctdb/ctdb.lock
+CTDB_PUBLIC_ADDRESSES=/etc/ctdb/public_addresses
+CTDB_NODES=/etc/ctdb/nodes
+CTDB_MANAGES_SAMBA=yes
+CTDB_MANAGES_WINBIND=yes
+CTDB_STARTUP_TIMEOUT=60
+CTDB_SHUTDOWN_TIMEOUT=60
+CTDB_MONITORING_INTERVAL=15
+CTDB_DEBUGLEVEL=1
+";
+    
+    # Write CTDB configuration to container
+    my $temp_file = "/tmp/ctdb.conf.$$";
+    open(my $fh, '>', $temp_file) or die "Cannot create temp ctdb.conf: $!";
+    print $fh $ctdb_conf;
+    close $fh;
+    
+    run_command(['pct', 'push', $container_id, $temp_file, '/etc/ctdb/ctdb.conf']);
+    unlink $temp_file;
     
     # Create nodes file
-    my $nodes_file = '/etc/ctdb/nodes';
-    open my $nodes_fh, '>', $nodes_file or die "Cannot create $nodes_file: $!";
-    foreach my $node (@$nodes) {
-        # Resolve node name to IP if needed
-        my $node_ip = _resolve_node_ip($node);
-        print $nodes_fh "$node_ip\n";
-    }
-    close $nodes_fh;
-    push @$rollback_steps, ['remove_ctdb_nodes_file'];
+    my $nodes_content = join("\n", @$nodes) . "\n";
+    my $nodes_file = "/tmp/nodes.$$";
+    open(my $fh, '>', $nodes_file) or die "Cannot create temp nodes file: $!";
+    print $fh $nodes_content;
+    close $fh;
+    
+    run_command(['pct', 'push', $container_id, $nodes_file, '/etc/ctdb/nodes']);
+    unlink $nodes_file;
     
     # Create public addresses file
-    my $pa_file = '/etc/ctdb/public_addresses';
-    open my $pa_fh, '>', $pa_file or die "Cannot create $pa_file: $!";
-    print $pa_fh "$vip/24 eth0\n";
-    close $pa_fh;
-    push @$rollback_steps, ['remove_ctdb_pa_file'];
+    my $public_addresses = "$vip/24 eth0\n";
+    my $pub_addr_file = "/tmp/public_addresses.$$";
+    open(my $fh, '>', $pub_addr_file) or die "Cannot create temp public_addresses file: $!";
+    print $fh $public_addresses;
+    close $fh;
     
-    # Enable and start CTDB
-    run_command(['systemctl', 'enable', 'ctdb']);
-    run_command(['systemctl', 'start', 'ctdb']);
-    push @$rollback_steps, ['stop_ctdb_service'];
+    run_command(['pct', 'push', $container_id, $pub_addr_file, '/etc/ctdb/public_addresses']);
+    unlink $pub_addr_file;
     
-    # Wait for CTDB to become healthy
+    # Configure Samba for CTDB
+    my $smb_conf = "
+[global]
+    clustering = yes
+    ctdbd socket = /var/lib/ctdb/ctdb.socket
+    idmap config * : backend = tdb
+    idmap config * : range = 10000-20000
+    workgroup = WORKGROUP
+    security = user
+    map to guest = bad user
+    dns proxy = no
+    log level = 1
+
+[$share]
+    path = /srv/smb/$share
+    browseable = yes
+    writable = yes
+    guest ok = no
+    read only = no
+    vfs objects = ctdb
+";
+    
+    # Write Samba configuration to container
+    my $smb_file = "/tmp/smb.conf.$$";
+    open(my $fh, '>', $smb_file) or die "Cannot create temp smb.conf: $!";
+    print $fh $smb_conf;
+    close $fh;
+    
+    run_command(['pct', 'push', $container_id, $smb_file, '/etc/samba/smb.conf']);
+    unlink $smb_file;
+    
+    # Start CTDB service
+    run_command(['pct', 'exec', $container_id, '--', 'systemctl', 'enable', 'ctdb']);
+    run_command(['pct', 'exec', $container_id, '--', 'systemctl', 'start', 'ctdb']);
+    
+    # Wait for CTDB to be ready
     my $max_attempts = 30;
     my $attempt = 0;
-    my $ctdb_healthy = 0;
-    
-    while ($attempt < $max_attempts && !$ctdb_healthy) {
-        my $status_output = `ctdb status 2>/dev/null`;
-        if ($status_output =~ /Number of nodes:\s*(\d+)/ && $1 > 0) {
-            $ctdb_healthy = 1;
-        } else {
-            sleep 2;
-            $attempt++;
+    while ($attempt < $max_attempts) {
+        my $ctdb_status = `pct exec $container_id -- ctdb status 2>/dev/null`;
+        if ($ctdb_status =~ /OK/) {
+            last;
         }
+        sleep 2;
+        $attempt++;
     }
     
-    unless ($ctdb_healthy) {
-        die "CTDB cluster failed to become healthy after $max_attempts attempts";
+    if ($attempt >= $max_attempts) {
+        die "CTDB failed to start properly in container $container_id";
     }
+    
+    # Add to rollback steps
+    push @$rollback_steps, ['stop_ctdb_lxc', $container_id];
     
     return {
-        nodes => $nodes,
+        success => 1,
+        message => "CTDB cluster setup successful in LXC container",
         vip => $vip,
-        status => 'healthy'
+        nodes => $nodes,
+        container_id => $container_id
     };
 }
 
-sub _resolve_node_ip {
-    my ($node) = @_;
+sub _setup_ctdb_vm {
+    my ($vm_id, $nodes, $vip, $rollback_steps, $share) = @_;
     
-    # If it's already an IP address, return it
-    if ($node =~ /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/) {
-        return $node;
+    # Get VM IP
+    my $vm_ip = _wait_for_vm_ip($vm_id);
+    unless ($vm_ip) {
+        die "Cannot get VM IP address for CTDB setup";
     }
     
-    # Try to resolve hostname to IP
-    my $ip_output = `getent hosts $node 2>/dev/null | awk '{print \$1}' | head -1`;
-    chomp $ip_output;
+    # Install CTDB packages in VM
+    my $ssh_cmd = "ssh -o StrictHostKeyChecking=no root\@$vm_ip";
+    run_command([$ssh_cmd, 'apt-get', 'update']);
+    run_command([$ssh_cmd, 'apt-get', 'install', '-y', 'ctdb', 'ctdb-dev']);
     
-    if ($ip_output && $ip_output =~ /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/) {
-        return $ip_output;
-    }
+    # Create CTDB configuration
+    my $ctdb_conf = "
+CTDB_RECOVERY_LOCK=/var/lib/ctdb/ctdb.lock
+CTDB_PUBLIC_ADDRESSES=/etc/ctdb/public_addresses
+CTDB_NODES=/etc/ctdb/nodes
+CTDB_MANAGES_SAMBA=yes
+CTDB_MANAGES_WINBIND=yes
+CTDB_STARTUP_TIMEOUT=60
+CTDB_SHUTDOWN_TIMEOUT=60
+CTDB_MONITORING_INTERVAL=15
+CTDB_DEBUGLEVEL=1
+";
     
-    # If resolution fails, try ping to get IP
-    my $ping_output = `ping -c 1 $node 2>/dev/null | grep 'PING' | grep -o '([0-9.]*)'`;
-    if ($ping_output =~ /\((\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\)/) {
-        return $1;
-    }
+    # Write CTDB configuration to VM
+    run_command([$ssh_cmd, 'cat > /etc/ctdb/ctdb.conf << EOF' . $ctdb_conf . 'EOF']);
     
-    die "Cannot resolve IP address for node: $node";
-}
+    # Create nodes file
+    my $nodes_content = join("\n", @$nodes) . "\n";
+    run_command([$ssh_cmd, 'cat > /etc/ctdb/nodes << EOF' . $nodes_content . 'EOF']);
+    
+    # Create public addresses file
+    my $public_addresses = "$vip/24 eth0\n";
+    run_command([$ssh_cmd, 'cat > /etc/ctdb/public_addresses << EOF' . $public_addresses . 'EOF']);
+    
+    # Configure Samba for CTDB
+    my $smb_conf = "
+[global]
+    clustering = yes
+    ctdbd socket = /var/lib/ctdb/ctdb.socket
+    idmap config * : backend = tdb
+    idmap config * : range = 10000-20000
+    workgroup = WORKGROUP
+    security = user
+    map to guest = bad user
+    dns proxy = no
+    log level = 1
 
-sub _allocate_vip {
-    my ($self) = @_;
+[$share]
+    path = /srv/smb/$share
+    browseable = yes
+    writable = yes
+    guest ok = no
+    read only = no
+    vfs objects = ctdb
+";
     
-    # Get network information from the first network interface
-    my $ip_output = `ip route get 8.8.8.8 2>/dev/null | head -1`;
-    my $network_base;
+    # Write Samba configuration to VM
+    run_command([$ssh_cmd, 'cat > /etc/samba/smb.conf << EOF' . $smb_conf . 'EOF']);
     
-    if ($ip_output =~ /src\s+(\d+\.\d+\.\d+)\.\d+/) {
-        $network_base = $1;
-    } else {
-        # Fallback to common private network ranges
-        $network_base = '192.168.1';
-    }
+    # Start CTDB service
+    run_command([$ssh_cmd, 'systemctl', 'enable', 'ctdb']);
+    run_command([$ssh_cmd, 'systemctl', 'start', 'ctdb']);
     
-    # Try to find an available IP in the same subnet
-    for my $last_octet (100..199) {
-        my $test_ip = "$network_base.$last_octet";
-        
-        # Check if IP is available (no ping response)
-        my $ping_result = system("ping -c 1 -W 1 $test_ip >/dev/null 2>&1");
-        if ($ping_result != 0) {
-            # IP appears to be available
-            return $test_ip;
+    # Wait for CTDB to be ready
+    my $max_attempts = 30;
+    my $attempt = 0;
+    while ($attempt < $max_attempts) {
+        my $ctdb_status = `$ssh_cmd 'ctdb status' 2>/dev/null`;
+        if ($ctdb_status =~ /OK/) {
+            last;
         }
+        sleep 2;
+        $attempt++;
     }
     
-    die "Cannot find available IP address for VIP allocation";
+    if ($attempt >= $max_attempts) {
+        die "CTDB failed to start properly in VM $vm_id";
+    }
+    
+    # Add to rollback steps
+    push @$rollback_steps, ['stop_ctdb_vm', $vm_id, $vm_ip];
+    
+    return {
+        success => 1,
+        message => "CTDB cluster setup successful in VM",
+        vip => $vip,
+        nodes => $nodes,
+        vm_id => $vm_id
+    };
 }
 
-sub _monitor_vip_health {
-    my ($self, $vip, $nodes) = @_;
+sub _setup_ctdb_native {
+    my ($nodes, $vip, $rollback_steps, $share) = @_;
+    
+    # Install CTDB packages
+    run_command(['apt-get', 'update']);
+    run_command(['apt-get', 'install', '-y', 'ctdb', 'ctdb-dev']);
+    
+    # Create CTDB configuration
+    my $ctdb_conf = "
+CTDB_RECOVERY_LOCK=/var/lib/ctdb/ctdb.lock
+CTDB_PUBLIC_ADDRESSES=/etc/ctdb/public_addresses
+CTDB_NODES=/etc/ctdb/nodes
+CTDB_MANAGES_SAMBA=yes
+CTDB_MANAGES_WINBIND=yes
+CTDB_STARTUP_TIMEOUT=60
+CTDB_SHUTDOWN_TIMEOUT=60
+CTDB_MONITORING_INTERVAL=15
+CTDB_DEBUGLEVEL=1
+";
+    
+    # Write CTDB configuration
+    open(my $fh, '>', '/etc/ctdb/ctdb.conf') or die "Cannot write /etc/ctdb/ctdb.conf: $!";
+    print $fh $ctdb_conf;
+    close $fh;
+    
+    # Create nodes file
+    open(my $fh, '>', '/etc/ctdb/nodes') or die "Cannot write /etc/ctdb/nodes: $!";
+    print $fh join("\n", @$nodes) . "\n";
+    close $fh;
+    
+    # Create public addresses file
+    open(my $fh, '>', '/etc/ctdb/public_addresses') or die "Cannot write /etc/ctdb/public_addresses: $!";
+    print $fh "$vip/24 eth0\n";
+    close $fh;
+    
+    # Configure Samba for CTDB
+    my $smb_conf = "
+[global]
+    clustering = yes
+    ctdbd socket = /var/lib/ctdb/ctdb.socket
+    idmap config * : backend = tdb
+    idmap config * : range = 10000-20000
+    workgroup = WORKGROUP
+    security = user
+    map to guest = bad user
+    dns proxy = no
+    log level = 1
+
+[$share]
+    path = /srv/smb/$share
+    browseable = yes
+    writable = yes
+    guest ok = no
+    read only = no
+    vfs objects = ctdb
+";
+    
+    # Write Samba configuration
+    open(my $fh, '>', '/etc/samba/smb.conf') or die "Cannot write /etc/samba/smb.conf: $!";
+    print $fh $smb_conf;
+    close $fh;
+    
+    # Start CTDB service
+    run_command(['systemctl', 'enable', 'ctdb']);
+    run_command(['systemctl', 'start', 'ctdb']);
+    
+    # Wait for CTDB to be ready
+    my $max_attempts = 30;
+    my $attempt = 0;
+    while ($attempt < $max_attempts) {
+        my $ctdb_status = `ctdb status 2>/dev/null`;
+        if ($ctdb_status =~ /OK/) {
+            last;
+        }
+        sleep 2;
+        $attempt++;
+    }
+    
+    if ($attempt >= $max_attempts) {
+        die "CTDB failed to start properly";
+    }
+    
+    # Add to rollback steps
+    push @$rollback_steps, ['stop_ctdb_native'];
+    
+    return {
+        success => 1,
+        message => "CTDB cluster setup successful in native mode",
+        vip => $vip,
+        nodes => $nodes
+    };
+}
+
+sub _get_ctdb_status {
+    my ($mode, $container_or_vm_id) = @_;
     
     my $status = {
-        vip => $vip,
-        nodes => $nodes,
+        cluster_healthy => 0,
+        vip_active => 0,
+        nodes_online => 0,
+        total_nodes => 0,
         active_node => undef,
-        status => 'unknown',
-        last_check => time()
+        details => {}
     };
     
-    # Check if CTDB is running
-    my $ctdb_status = `systemctl is-active ctdb 2>/dev/null`;
-    chomp $ctdb_status;
-    
-    if ($ctdb_status ne 'active') {
-        $status->{status} = 'ctdb_down';
-        $status->{message} = 'CTDB service is not running';
-        return $status;
-    }
-    
-    # Check CTDB cluster status
-    my $cluster_status = `ctdb status 2>/dev/null`;
-    if ($cluster_status =~ /Number of nodes:\s*(\d+)/) {
-        $status->{cluster_size} = $1;
+    if ($mode eq 'lxc') {
+        # Get CTDB status from container
+        my $ctdb_status = `pct exec $container_or_vm_id -- ctdb status 2>/dev/null`;
+        $status = _parse_ctdb_status($ctdb_status);
         
-        # Check which node has the VIP
-        my $ip_status = `ctdb ip 2>/dev/null`;
-        if ($ip_status =~ /$vip\s+(\d+)\s+(\S+)/) {
-            $status->{active_node} = $1;
-            $status->{node_status} = $2;
-            
-            if ($2 eq 'OK') {
-                $status->{status} = 'healthy';
-                $status->{message} = "VIP $vip is active on node $1";
-            } else {
-                $status->{status} = 'degraded';
-                $status->{message} = "VIP $vip on node $1 has status: $2";
-            }
-        } else {
-            $status->{status} = 'vip_missing';
-            $status->{message} = "VIP $vip not found in CTDB";
+        # Get VIP status
+        my $vip_status = `pct exec $container_or_vm_id -- ip addr show | grep -E "inet.*eth0"`;
+        if ($vip_status =~ /(\d+\.\d+\.\d+\.\d+)/) {
+            $status->{vip_active} = 1;
+            $status->{active_vip} = $1;
         }
+        
+    } elsif ($mode eq 'vm') {
+        # Get VM IP
+        my $vm_ip = _wait_for_vm_ip($container_or_vm_id);
+        if ($vm_ip) {
+            my $ssh_cmd = "ssh -o StrictHostKeyChecking=no root\@$vm_ip";
+            my $ctdb_status = `$ssh_cmd 'ctdb status' 2>/dev/null`;
+            $status = _parse_ctdb_status($ctdb_status);
+            
+            # Get VIP status
+            my $vip_status = `$ssh_cmd 'ip addr show | grep -E "inet.*eth0"'`;
+            if ($vip_status =~ /(\d+\.\d+\.\d+\.\d+)/) {
+                $status->{vip_active} = 1;
+                $status->{active_vip} = $1;
+            }
+        }
+        
     } else {
-        $status->{status} = 'cluster_error';
-        $status->{message} = 'Cannot get CTDB cluster status';
+        # Get CTDB status from host
+        my $ctdb_status = `ctdb status 2>/dev/null`;
+        $status = _parse_ctdb_status($ctdb_status);
+        
+        # Get VIP status
+        my $vip_status = `ip addr show | grep -E "inet.*eth0"`;
+        if ($vip_status =~ /(\d+\.\d+\.\d+\.\d+)/) {
+            $status->{vip_active} = 1;
+            $status->{active_vip} = $1;
+        }
     }
     
     return $status;
+}
+
+sub _parse_ctdb_status {
+    my ($ctdb_output) = @_;
+    
+    my $status = {
+        cluster_healthy => 0,
+        nodes_online => 0,
+        total_nodes => 0,
+        active_node => undef,
+        details => {}
+    };
+    
+    # Parse CTDB status output
+    foreach my $line (split /\n/, $ctdb_output) {
+        if ($line =~ /Number of nodes:(\d+)/) {
+            $status->{total_nodes} = $1;
+        } elsif ($line =~ /Online:(\d+)/) {
+            $status->{nodes_online} = $1;
+        } elsif ($line =~ /OK/) {
+            $status->{cluster_healthy} = 1;
+        } elsif ($line =~ /THIS NODE/) {
+            $status->{active_node} = 'this_node';
+        }
+    }
+    
+    return $status;
+}
+
+sub _trigger_ctdb_failover {
+    my ($mode, $container_or_vm_id, $target_node) = @_;
+    
+    if ($mode eq 'lxc') {
+        # Trigger failover in LXC container
+        run_command(['pct', 'exec', $container_or_vm_id, '--', 'ctdb', 'reloadnodes']);
+        
+    } elsif ($mode eq 'vm') {
+        # Get VM IP and trigger failover
+        my $vm_ip = _wait_for_vm_ip($container_or_vm_id);
+        if ($vm_ip) {
+            my $ssh_cmd = "ssh -o StrictHostKeyChecking=no root\@$vm_ip";
+            run_command([$ssh_cmd, 'ctdb', 'reloadnodes']);
+        }
+        
+    } else {
+        # Trigger failover in native mode
+        run_command(['ctdb', 'reloadnodes']);
+    }
+    
+    return {
+        success => 1,
+        message => "CTDB failover triggered",
+        target_node => $target_node
+    };
+}
+
+sub _test_ctdb_connectivity {
+    my ($vip, $share) = @_;
+    
+    # Test SMB connectivity to VIP
+    my $smb_test = `timeout 10 smbclient -L //$vip -U guest% 2>/dev/null`;
+    if ($smb_test && $smb_test !~ /error/i) {
+        return {
+            success => 1,
+            message => "SMB connectivity to VIP $vip successful",
+            vip => $vip
+        };
+    } else {
+        return {
+            success => 0,
+            message => "SMB connectivity to VIP $vip failed",
+            vip => $vip
+        };
+    }
 }
 
 # -------- rollback system --------

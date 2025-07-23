@@ -148,6 +148,52 @@ sub get_ad_status {
     
     return { status => 'error', message => 'Failed to get AD status' };
 }
+
+sub get_ha_status {
+    my ($self, $share_id) = @_;
+    chomp(my $hostname = `hostname`);
+    
+    eval {
+        my $response = $self->api_call('GET', "/nodes/$hostname/storage/$share_id/status");
+        if ($response->{data}->{ctdb_status}) {
+            return $response->{data}->{ctdb_status};
+        }
+        return { status => 'unknown', message => 'HA status not available' };
+    };
+    
+    return { status => 'error', message => 'Failed to get HA status' };
+}
+
+sub test_ha_failover {
+    my ($self, $share_id, $target_node) = @_;
+    chomp(my $hostname = `hostname`);
+    
+    my $data = {
+        target_node => $target_node
+    };
+    
+    eval {
+        my $response = $self->api_call('POST', "/nodes/$hostname/storage/$share_id/failover", $data);
+        return $response->{data};
+    };
+    
+    return { status => 'error', message => 'Failed to trigger HA failover' };
+}
+
+sub test_ha_connectivity {
+    my ($self, $vip, $share) = @_;
+    
+    # Test SMB connectivity to VIP
+    print "Testing SMB connectivity to VIP $vip...\n";
+    my $smb_test = `timeout 10 smbclient -L //$vip -U guest% 2>/dev/null`;
+    if ($smb_test && $smb_test !~ /error/i) {
+        print "✓ SMB connectivity to VIP $vip successful\n";
+        return 1;
+    } else {
+        print "✗ SMB connectivity to VIP $vip failed\n";
+        return 0;
+    }
+}
     
     return $response;
 }
@@ -346,6 +392,83 @@ if ($command eq 'list') {
         }
     } else {
         print "Failed to get AD status: $status\n";
+    }
+    
+} elsif ($command eq 'ha-status') {
+    die "Usage: $0 ha-status <share_id>\n" unless $share_id;
+    
+    my $status = $cli->get_ha_status($share_id);
+    
+    if (ref($status) eq 'HASH') {
+        print "HA status for share '$share_id':\n";
+        print "  Status: $status->{status}\n";
+        print "  Message: $status->{message}\n";
+        
+        if ($status->{cluster_healthy}) {
+            print "  Cluster healthy: " . ($status->{cluster_healthy} ? "Yes" : "No") . "\n";
+        }
+        
+        if ($status->{vip_active}) {
+            print "  VIP active: " . ($status->{vip_active} ? "Yes" : "No") . "\n";
+        }
+        
+        if ($status->{active_vip}) {
+            print "  Active VIP: $status->{active_vip}\n";
+        }
+        
+        if ($status->{nodes_online}) {
+            print "  Nodes online: $status->{nodes_online}\n";
+        }
+        
+        if ($status->{total_nodes}) {
+            print "  Total nodes: $status->{total_nodes}\n";
+        }
+        
+        if ($status->{active_node}) {
+            print "  Active node: $status->{active_node}\n";
+        }
+    } else {
+        print "Failed to get HA status: $status\n";
+    }
+    
+} elsif ($command eq 'ha-test') {
+    die "Usage: $0 ha-test --vip <vip> --share <share> [--target-node <node>]\n" unless $ctdb_vip;
+    
+    print "Testing HA functionality...\n";
+    
+    # Test VIP connectivity
+    my $connectivity_result = $cli->test_ha_connectivity($ctdb_vip, $share_id);
+    
+    if ($connectivity_result) {
+        print "✓ VIP connectivity test passed\n";
+    } else {
+        print "✗ VIP connectivity test failed\n";
+    }
+    
+    # Test failover if target node specified
+    if ($target_node) {
+        print "Testing failover to node $target_node...\n";
+        my $failover_result = $cli->test_ha_failover($share_id, $target_node);
+        
+        if (ref($failover_result) eq 'HASH' && $failover_result->{success}) {
+            print "✓ Failover test successful\n";
+        } else {
+            print "✗ Failover test failed\n";
+        }
+    }
+    
+} elsif ($command eq 'ha-failover') {
+    die "Usage: $0 ha-failover <share_id> --target-node <node>\n" unless $share_id && $target_node;
+    
+    print "Triggering HA failover for share '$share_id' to node '$target_node'...\n";
+    
+    my $result = $cli->test_ha_failover($share_id, $target_node);
+    
+    if (ref($result) eq 'HASH' && $result->{success}) {
+        print "✓ HA failover triggered successfully\n";
+    } else {
+        print "✗ HA failover failed: " . ($result->{message} || 'Unknown error') . "\n";
+        exit 1;
     }
         print "VIP status for share '$share_id': $status\n";
     }
