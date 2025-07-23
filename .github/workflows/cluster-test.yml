@@ -1,0 +1,145 @@
+name: PVE SMB Gateway Cluster Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      cluster_nodes:
+        description: 'Comma-separated list of cluster node IPs'
+        required: true
+        default: '192.168.1.10,192.168.1.11,192.168.1.12'
+      test_environment:
+        description: 'Test environment type'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production-simulated
+
+jobs:
+  # Unit and integration tests (runs on GitHub runners)
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Perl environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y perl libtest-more-perl libtest-mockmodule-perl
+    
+    - name: Run unit tests
+      run: |
+        make test
+    
+    - name: Run linting
+      run: |
+        make lint
+    
+    - name: Build package
+      run: |
+        make deb
+
+  # Cluster integration tests (runs on actual Proxmox cluster)
+  cluster-integration:
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        test_suite: [basic, ha, ad, performance, security]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup SSH access to cluster
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.CLUSTER_SSH_KEY }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -H ${{ github.event.inputs.cluster_nodes || '192.168.1.10,192.168.1.11,192.168.1.12' }} >> ~/.ssh/known_hosts
+    
+    - name: Deploy to cluster nodes
+      run: |
+        CLUSTER_NODES="${{ github.event.inputs.cluster_nodes || '192.168.1.10,192.168.1.11,192.168.1.12' }}"
+        for node in ${CLUSTER_NODES//,/ }; do
+          echo "Deploying to node: $node"
+          scp ../pve-plugin-smbgateway_*.deb root@$node:/tmp/
+          ssh root@$node "dpkg -i /tmp/pve-plugin-smbgateway_*.deb && systemctl restart pveproxy"
+        done
+    
+    - name: Run cluster tests
+      run: |
+        CLUSTER_NODES="${{ github.event.inputs.cluster_nodes || '192.168.1.10,192.168.1.11,192.168.1.12' }}"
+        PRIMARY_NODE=$(echo $CLUSTER_NODES | cut -d',' -f1)
+        
+        # Copy test scripts to primary node
+        scp -r scripts/ root@$PRIMARY_NODE:/tmp/pve-smbgateway-tests/
+        
+        # Run specific test suite
+        ssh root@$PRIMARY_NODE "cd /tmp/pve-smbgateway-tests && ./test_${{ matrix.test_suite }}_integration.sh"
+    
+    - name: Collect test results
+      run: |
+        CLUSTER_NODES="${{ github.event.inputs.cluster_nodes || '192.168.1.10,192.168.1.11,192.168.1.12' }}"
+        PRIMARY_NODE=$(echo $CLUSTER_NODES | cut -d',' -f1)
+        
+        # Download test results
+        scp -r root@$PRIMARY_NODE:/tmp/pve-smbgateway-test-results/ ./test-results/
+        
+        # Upload as artifacts
+        if [ -d "./test-results" ]; then
+          tar -czf test-results-${{ matrix.test_suite }}.tar.gz test-results/
+        fi
+    
+    - name: Upload test artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: test-results-${{ matrix.test_suite }}
+        path: test-results-${{ matrix.test_suite }}.tar.gz
+
+  # HA failover testing
+  ha-failover:
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Run HA failover tests
+      run: |
+        CLUSTER_NODES="${{ github.event.inputs.cluster_nodes || '192.168.1.10,192.168.1.11,192.168.1.12' }}"
+        PRIMARY_NODE=$(echo $CLUSTER_NODES | cut -d',' -f1)
+        
+        scp scripts/test_ha_failover.sh root@$PRIMARY_NODE:/tmp/
+        ssh root@$PRIMARY_NODE "chmod +x /tmp/test_ha_failover.sh && /tmp/test_ha_failover.sh"
+
+  # Performance benchmarking
+  performance-benchmark:
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Run performance tests
+      run: |
+        CLUSTER_NODES="${{ github.event.inputs.cluster_nodes || '192.168.1.10,192.168.1.11,192.168.1.12' }}"
+        PRIMARY_NODE=$(echo $CLUSTER_NODES | cut -d',' -f1)
+        
+        scp scripts/test_performance_benchmarks.sh root@$PRIMARY_NODE:/tmp/
+        ssh root@$PRIMARY_NODE "chmod +x /tmp/test_performance_benchmarks.sh && /tmp/test_performance_benchmarks.sh"
+        
+        # Download and analyze results
+        scp root@$PRIMARY_NODE:/tmp/performance-results.json ./performance-results.json
+    
+    - name: Analyze performance results
+      run: |
+        if [ -f "performance-results.json" ]; then
+          echo "Performance test results:"
+          cat performance-results.json
+          
+          # Check for performance regressions
+          python3 scripts/analyze_performance.py performance-results.json
+        fi 

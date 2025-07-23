@@ -6,6 +6,50 @@
 
 **Lightweight SMB/CIFS Gateway Plugin for Proxmox VE** - Create SMB shares in seconds, not minutes. No more NAS VMs needed.
 
+## ⚠️ **CRITICAL ALPHA DISCLAIMER** ⚠️
+
+### **🚨 THIS IS ALPHA SOFTWARE - USE AT YOUR OWN RISK** 🚨
+
+**IMPORTANT WARNINGS:**
+
+- **🔴 NOT PRODUCTION READY**: This software is in **early alpha development** and is **NOT suitable for production use**
+- **🔴 NO WARRANTIES**: We make **NO guarantees** of any kind regarding functionality, stability, or safety
+- **🔴 SYSTEM RISK**: This software **MAY harm your system or cluster** if used without thorough testing
+- **🔴 EXPERIMENTAL**: This is **experimental software** that may contain bugs, security vulnerabilities, or data corruption issues
+- **🔴 NO SUPPORT**: We provide **NO support** for alpha releases and cannot be held responsible for any issues
+
+### **📋 REQUIREMENTS FOR USE:**
+
+1. **🧪 TESTING ENVIRONMENT**: Only use in a **dedicated testing environment** with no production data
+2. **🔍 THOROUGH TESTING**: **Extensively test** all features before considering any production use
+3. **📚 UNDERSTANDING**: **Fully understand** the code and its implications before deployment
+4. **🛡️ BACKUP**: **Always backup** your system before testing
+5. **👨‍💻 EXPERTISE**: **Advanced Proxmox and Linux knowledge** required
+
+### **🚫 PROHIBITED USES:**
+
+- ❌ **Production environments** of any kind
+- ❌ **Systems with important data** without thorough testing
+- ❌ **Multi-user environments** without complete validation
+- ❌ **Critical infrastructure** without extensive testing
+- ❌ **Any environment** where data loss would be unacceptable
+
+### **✅ ACCEPTABLE USES:**
+
+- ✅ **Personal testing environments**
+- ✅ **Educational purposes**
+- ✅ **Development and experimentation**
+- ✅ **Non-critical homelab environments** (with backups)
+- ✅ **Contributing to the project**
+
+**By using this software, you acknowledge that:**
+- You understand this is alpha software with no guarantees
+- You accept all risks and responsibility for any issues
+- You will test thoroughly before any production use
+- You will not hold the developers responsible for any problems
+
+---
+
 ## 🚀 **Alpha Release - Ready for Testing!**
 
 The PVE SMB Gateway plugin is now in **alpha testing** with core functionality working. This plugin makes SMB share management as simple as creating a VM or container in Proxmox.
@@ -227,14 +271,38 @@ pve-smbgateway ha-test --vip 192.168.1.100 --share myshare
 - HA features require multi-node testing
 - Performance benchmarks in progress
 
-## 📞 **Support & Community**
+## 🤝 **Support the Project**
 
-### **Community Resources**
+### **💻 Contribute to Development**
+We welcome contributions from the community! Please consider:
+
+- **🐛 Report Bugs**: Help us identify and fix issues
+- **💡 Suggest Features**: Share ideas for improvements
+- **📝 Improve Documentation**: Help make the project more accessible
+- **🔧 Submit Code**: Contribute patches and enhancements
+- **🧪 Test Features**: Help validate functionality
+
+### **💰 Support Development**
+If this project helps you, consider supporting its development:
+
+- **⭐ Star the Repository**: Boost visibility on GitHub
+- **💬 Share Feedback**: Help us understand user needs
+- **📢 Spread the Word**: Tell other Proxmox users about the project
+- **💸 Donate**: Support continued development
+
+#### **Donation Options**
+| Method | Address | Notes |
+|--------|---------|-------|
+| **BTC** | `bc1qts6kmeezwf3gmqn26vjmpyvg3j9ntj8yhjmp9q` | Bitcoin |
+| **ETH** | `0x2caE2C49221f5Da0D790274388A7c9Ce49FdEb41` | Ethereum |
+| **USDT** | `0x2caE2C49221f5Da0D790274388A7c9Ce49FdEb41` | ERC-20 |
+
+### **📞 Community Support**
 - **GitHub Issues**: Bug reports and feature requests
 - **Proxmox Forum**: Community discussion
 - **Documentation**: Complete guides in `/docs/`
 
-### **Professional Support**
+### **📧 Professional Support**
 - **Email**: eric@gozippy.com
 - **Commercial License**: Enterprise features and support
 - **Custom Development**: Tailored solutions
@@ -302,12 +370,14 @@ sudo systemctl restart pveproxy
 ### **Testing**
 ```bash
 # Run all tests
-make test
+make test-all
 
-# Run specific test suites
-./scripts/test_integration_comprehensive.sh
-./scripts/test_performance_benchmarks.sh
-./scripts/test_security.sh
+# Run specific test categories
+make test              # Unit tests only
+make test-integration  # Integration tests
+make test-cluster      # Cluster tests
+make test-performance  # Performance benchmarks
+make test-ha          # HA failover tests
 ```
 
 ## 📞 **Contact**
@@ -326,9 +396,13 @@ make test
 
 ---
 
-**Ready to simplify your SMB storage management?** 🚀
+## ⚠️ **FINAL WARNING** ⚠️
 
-*Making SMB storage management simple, powerful, and enterprise-ready.*
+**This is alpha software with no guarantees. Use at your own risk. Test thoroughly before any production use. The developers cannot be held responsible for any issues, data loss, or system damage.**
+
+**Ready to test the future of SMB management?** 🚀
+
+*From complex NAS VMs to simple, efficient SMB shares in seconds.*
 
 ---
 

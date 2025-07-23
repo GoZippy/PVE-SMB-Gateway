@@ -1,0 +1,100 @@
+version: '3.8'
+
+services:
+  # Test cluster node 1
+  pve-node1:
+    build:
+      context: .
+      dockerfile: docker/test-cluster/Dockerfile
+    container_name: pve-test-node1
+    hostname: pve-node1
+    environment:
+      - TEST_TYPE=cluster
+      - CLUSTER_NODES=pve-node1,pve-node2,pve-node3
+      - CLUSTER_VIP=192.168.1.100
+    volumes:
+      - ./test-results:/tmp/test-results
+      - ./scripts:/opt/pve-smbgateway/scripts:ro
+      - ./t:/opt/pve-smbgateway/t:ro
+      - ./PVE:/opt/pve-smbgateway/PVE:ro
+      - ./sbin:/opt/pve-smbgateway/sbin:ro
+    networks:
+      test-cluster:
+        ipv4_address: 192.168.1.10
+    depends_on:
+      - pve-node2
+      - pve-node3
+
+  # Test cluster node 2
+  pve-node2:
+    build:
+      context: .
+      dockerfile: docker/test-cluster/Dockerfile
+    container_name: pve-test-node2
+    hostname: pve-node2
+    environment:
+      - TEST_TYPE=cluster
+      - CLUSTER_NODES=pve-node1,pve-node2,pve-node3
+      - CLUSTER_VIP=192.168.1.100
+    volumes:
+      - ./test-results:/tmp/test-results
+      - ./scripts:/opt/pve-smbgateway/scripts:ro
+      - ./t:/opt/pve-smbgateway/t:ro
+      - ./PVE:/opt/pve-smbgateway/PVE:ro
+      - ./sbin:/opt/pve-smbgateway/sbin:ro
+    networks:
+      test-cluster:
+        ipv4_address: 192.168.1.11
+
+  # Test cluster node 3
+  pve-node3:
+    build:
+      context: .
+      dockerfile: docker/test-cluster/Dockerfile
+    container_name: pve-test-node3
+    hostname: pve-node3
+    environment:
+      - TEST_TYPE=cluster
+      - CLUSTER_NODES=pve-node1,pve-node2,pve-node3
+      - CLUSTER_VIP=192.168.1.100
+    volumes:
+      - ./test-results:/tmp/test-results
+      - ./scripts:/opt/pve-smbgateway/scripts:ro
+      - ./t:/opt/pve-smbgateway/t:ro
+      - ./PVE:/opt/pve-smbgateway/PVE:ro
+      - ./sbin:/opt/pve-smbgateway/sbin:ro
+    networks:
+      test-cluster:
+        ipv4_address: 192.168.1.12
+
+  # Test runner
+  test-runner:
+    build:
+      context: .
+      dockerfile: docker/test-cluster/Dockerfile
+    container_name: pve-test-runner
+    environment:
+      - TEST_TYPE=all
+      - CLUSTER_NODES=pve-node1,pve-node2,pve-node3
+      - CLUSTER_VIP=192.168.1.100
+    volumes:
+      - ./test-results:/tmp/test-results
+      - ./scripts:/opt/pve-smbgateway/scripts:ro
+      - ./t:/opt/pve-smbgateway/t:ro
+      - ./PVE:/opt/pve-smbgateway/PVE:ro
+      - ./sbin:/opt/pve-smbgateway/sbin:ro
+    networks:
+      test-cluster:
+        ipv4_address: 192.168.1.100
+    depends_on:
+      - pve-node1
+      - pve-node2
+      - pve-node3
+    command: ["/opt/pve-smbgateway/scripts/automated_cluster_test.sh"]
+
+networks:
+  test-cluster:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.1.0/24 

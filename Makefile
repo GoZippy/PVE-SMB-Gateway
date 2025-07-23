@@ -46,6 +46,48 @@ test:
 		perl t/10-create-share.t; \
 	fi
 
+test-all: test test-integration test-cluster
+
+test-integration:
+	@echo "Running integration tests..."
+	@if [ -f scripts/test_integration.sh ]; then \
+		./scripts/test_integration.sh; \
+	else \
+		echo "Warning: Integration test script not found"; \
+	fi
+
+test-cluster:
+	@echo "Running cluster tests..."
+	@if [ -f scripts/automated_cluster_test.sh ]; then \
+		./scripts/automated_cluster_test.sh; \
+	else \
+		echo "Warning: Cluster test script not found"; \
+	fi
+
+test-docker:
+	@echo "Running tests in Docker environment..."
+	@if command -v docker-compose >/dev/null 2>&1; then \
+		docker-compose -f docker-compose.test.yml up --build --abort-on-container-exit; \
+	else \
+		echo "Warning: docker-compose not found"; \
+	fi
+
+test-performance:
+	@echo "Running performance tests..."
+	@if [ -f scripts/test_performance_benchmarks.sh ]; then \
+		./scripts/test_performance_benchmarks.sh; \
+	else \
+		echo "Warning: Performance test script not found"; \
+	fi
+
+test-ha:
+	@echo "Running HA failover tests..."
+	@if [ -f scripts/test_ha_failover.sh ]; then \
+		./scripts/test_ha_failover.sh; \
+	else \
+		echo "Warning: HA test script not found"; \
+	fi
+
 # Package building
 deb:
 	@echo "Building .deb package..."
