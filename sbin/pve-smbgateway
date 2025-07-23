@@ -97,6 +97,57 @@ sub trigger_failover {
     };
     
     my $response = $self->api_call('POST', "/nodes/$hostname/storage/$share_id/failover", $data);
+}
+
+sub test_ad_connectivity {
+    my ($self, $domain, $username, $password, $ou) = @_;
+    
+    # Test DNS resolution
+    print "Testing DNS resolution for $domain...\n";
+    my $dns_result = `nslookup $domain 2>&1`;
+    if ($dns_result =~ /Address:\s*(\d+\.\d+\.\d+\.\d+)/) {
+        print "✓ Domain resolves to $1\n";
+    } else {
+        print "✗ Domain resolution failed\n";
+        return 0;
+    }
+    
+    # Test SRV records
+    print "Testing SRV records...\n";
+    my $srv_result = `nslookup -type=srv _ldap._tcp.$domain 2>&1`;
+    if ($srv_result =~ /svr hostname/) {
+        print "✓ LDAP SRV records found\n";
+    } else {
+        print "✗ No LDAP SRV records found\n";
+    }
+    
+    # Test Kerberos authentication
+    print "Testing Kerberos authentication...\n";
+    my $kinit_result = `echo '$password' | kinit '$username@$domain' 2>&1`;
+    if ($kinit_result =~ /Password incorrect/ || $kinit_result =~ /Client not found/) {
+        print "✓ Kerberos authentication mechanism working\n";
+        system('kdestroy >/dev/null 2>&1');
+    } else {
+        print "✗ Kerberos authentication failed: $kinit_result\n";
+    }
+    
+    return 1;
+}
+
+sub get_ad_status {
+    my ($self, $share_id) = @_;
+    chomp(my $hostname = `hostname`);
+    
+    eval {
+        my $response = $self->api_call('GET', "/nodes/$hostname/storage/$share_id/status");
+        if ($response->{data}->{ad_status}) {
+            return $response->{data}->{ad_status};
+        }
+        return { status => 'unknown', message => 'AD status not available' };
+    };
+    
+    return { status => 'error', message => 'Failed to get AD status' };
+}
     
     return $response;
 }
@@ -247,6 +298,55 @@ if ($command eq 'list') {
             }
         }
     } else {
+        print "Failed to get VIP status: $status\n";
+    }
+    
+} elsif ($command eq 'ad-test') {
+    die "Usage: $0 ad-test --domain <domain> --username <username> --password <password> [--ou <ou>]\n" unless $ad_domain && $ad_username && $ad_password;
+    
+    print "Testing Active Directory connectivity...\n";
+    
+    my $result = $cli->test_ad_connectivity($ad_domain, $ad_username, $ad_password, $ad_ou);
+    
+    if ($result) {
+        print "✓ AD connectivity test completed successfully\n";
+    } else {
+        print "✗ AD connectivity test failed\n";
+        exit 1;
+    }
+    
+} elsif ($command eq 'ad-status') {
+    die "Usage: $0 ad-status <share_id>\n" unless $share_id;
+    
+    my $status = $cli->get_ad_status($share_id);
+    
+    if (ref($status) eq 'HASH') {
+        print "AD status for share '$share_id':\n";
+        print "  Status: $status->{status}\n";
+        print "  Message: $status->{message}\n";
+        
+        if ($status->{domain}) {
+            print "  Domain: $status->{domain}\n";
+        }
+        
+        if ($status->{realm}) {
+            print "  Realm: $status->{realm}\n";
+        }
+        
+        if ($status->{workgroup}) {
+            print "  Workgroup: $status->{workgroup}\n";
+        }
+        
+        if ($status->{joined}) {
+            print "  Domain joined: " . ($status->{joined} ? "Yes" : "No") . "\n";
+        }
+        
+        if ($status->{fallback_user}) {
+            print "  Fallback user: $status->{fallback_user}\n";
+        }
+    } else {
+        print "Failed to get AD status: $status\n";
+    }
         print "VIP status for share '$share_id': $status\n";
     }
     

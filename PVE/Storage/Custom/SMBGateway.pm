@@ -1250,9 +1250,447 @@ sub _update_quota_history {
     }
 }
 
-1;
-# -------
-- VM mode implementations --------
+# -------- Active Directory integration --------
+sub _join_ad_domain {
+    my ($self, $domain, $username, $password, $ou, $mode, $container_or_vm_id, $rollback_steps, $share, $fallback) = @_;
+    
+    # Validate domain format
+    unless ($domain =~ /^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/) {
+        die "Invalid domain format: $domain";
+    }
+    
+    # Validate credentials
+    unless ($username && $password) {
+        die "AD username and password are required for domain join";
+    }
+    
+    # Discover domain controllers
+    my $dc_info = _discover_domain_controllers($domain);
+    unless ($dc_info) {
+        die "Cannot discover domain controllers for $domain";
+    }
+    
+    # Test connectivity to domain controllers
+    my $dc_online = _test_dc_connectivity($dc_info);
+    unless ($dc_online) {
+        if ($fallback) {
+            warn "Domain controller connectivity failed, using fallback authentication";
+            return _setup_fallback_auth($share, $rollback_steps);
+        } else {
+            die "Cannot connect to domain controllers for $domain";
+        }
+    }
+    
+    # Configure Kerberos
+    _configure_kerberos($domain, $dc_info, $mode, $container_or_vm_id);
+    
+    # Join domain based on mode
+    my $join_result;
+    if ($mode eq 'lxc') {
+        $join_result = _join_ad_domain_lxc($container_or_vm_id, $domain, $username, $password, $ou, $fallback);
+    } elsif ($mode eq 'vm') {
+        $join_result = _join_ad_domain_vm($container_or_vm_id, $domain, $username, $password, $ou, $fallback);
+    } else {
+        $join_result = _join_ad_domain_native($domain, $username, $password, $ou, $fallback);
+    }
+    
+    # Configure Samba for AD authentication
+    _configure_samba_ad($share, $domain, $dc_info, $fallback);
+    
+    return $join_result;
+}
+
+sub _discover_domain_controllers {
+    my ($domain) = @_;
+    
+    my $dc_info = {
+        domain => $domain,
+        realm => uc($domain),
+        workgroup => uc((split /\./, $domain)[0]),
+        controllers => []
+    };
+    
+    # Try DNS SRV records first
+    my $srv_records = `nslookup -type=srv _ldap._tcp.$domain 2>/dev/null`;
+    if ($srv_records =~ /(\w+\.$domain)/g) {
+        push @{$dc_info->{controllers}}, $1;
+    }
+    
+    # Fallback to direct domain lookup
+    unless (@{$dc_info->{controllers}}) {
+        my $domain_lookup = `nslookup $domain 2>/dev/null`;
+        if ($domain_lookup =~ /Address:\s*(\d+\.\d+\.\d+\.\d+)/) {
+            push @{$dc_info->{controllers}}, $1;
+        }
+    }
+    
+    # Try common DC names
+    unless (@{$dc_info->{controllers}}) {
+        my @common_dc_names = ("dc1", "dc", "ad", "ldap");
+        foreach my $dc_name (@common_dc_names) {
+            my $dc_test = `nslookup $dc_name.$domain 2>/dev/null`;
+            if ($dc_test =~ /Address:\s*(\d+\.\d+\.\d+\.\d+)/) {
+                push @{$dc_info->{controllers}}, "$dc_name.$domain";
+                last;
+            }
+        }
+    }
+    
+    return @{$dc_info->{controllers}} ? $dc_info : undef;
+}
+
+sub _test_dc_connectivity {
+    my ($dc_info) = @_;
+    
+    foreach my $dc (@{$dc_info->{controllers}}) {
+        # Test LDAP connectivity
+        my $ldap_test = `timeout 5 ldapsearch -H ldap://$dc -x -b "" -s base 2>/dev/null`;
+        if ($ldap_test && $ldap_test !~ /error/i) {
+            return $dc;
+        }
+        
+        # Test SMB connectivity
+        my $smb_test = `timeout 5 smbclient -L $dc -U guest% 2>/dev/null`;
+        if ($smb_test && $smb_test !~ /error/i) {
+            return $dc;
+        }
+    }
+    
+    return undef;
+}
+
+sub _configure_kerberos {
+    my ($domain, $dc_info, $mode, $container_or_vm_id) = @_;
+    
+    my $krb5_conf = "
+[libdefaults]
+    default_realm = $dc_info->{realm}
+    dns_lookup_realm = false
+    dns_lookup_kdc = true
+    ticket_lifetime = 24h
+    renew_lifetime = 7d
+    forwardable = true
+    rdns = false
+
+[realms]
+    $dc_info->{realm} = {
+        kdc = $dc_info->{controllers}[0]
+        admin_server = $dc_info->{controllers}[0]
+        default_domain = $domain
+    }
+
+[domain_realm]
+    .$domain = $dc_info->{realm}
+    $domain = $dc_info->{realm}
+";
+    
+    if ($mode eq 'lxc') {
+        # Write krb5.conf to container
+        my $temp_file = "/tmp/krb5.conf.$$";
+        open(my $fh, '>', $temp_file) or die "Cannot create temp krb5.conf: $!";
+        print $fh $krb5_conf;
+        close $fh;
+        
+        run_command(['pct', 'push', $container_or_vm_id, $temp_file, '/etc/krb5.conf']);
+        unlink $temp_file;
+        
+    } elsif ($mode eq 'vm') {
+        # Write krb5.conf to VM
+        my $temp_file = "/tmp/krb5.conf.$$";
+        open(my $fh, '>', $temp_file) or die "Cannot create temp krb5.conf: $!";
+        print $fh $krb5_conf;
+        close $fh;
+        
+        # Get VM IP
+        my $vm_ip = _wait_for_vm_ip($container_or_vm_id);
+        if ($vm_ip) {
+            run_command(['scp', $temp_file, "root\@$vm_ip:/etc/krb5.conf"]);
+        }
+        unlink $temp_file;
+        
+    } else {
+        # Write krb5.conf to host
+        open(my $fh, '>', '/etc/krb5.conf') or die "Cannot write /etc/krb5.conf: $!";
+        print $fh $krb5_conf;
+        close $fh;
+    }
+}
+
+sub _join_ad_domain_lxc {
+    my ($container_id, $domain, $username, $password, $ou, $fallback) = @_;
+    
+    # Install required packages in container
+    run_command(['pct', 'exec', $container_id, '--', 'apt-get', 'update']);
+    run_command(['pct', 'exec', $container_id, '--', 'apt-get', 'install', '-y', 'samba', 'winbind', 'krb5-user', 'libpam-krb5']);
+    
+    # Configure Samba for AD join
+    my $smb_conf = "
+[global]
+    workgroup = " . uc((split /\./, $domain)[0]) . "
+    realm = " . uc($domain) . "
+    security = ads
+    encrypt passwords = yes
+    password server = $domain
+    idmap config * : backend = tdb
+    idmap config * : range = 10000-20000
+    winbind use default domain = yes
+    winbind enum users = yes
+    winbind enum groups = yes
+    template homedir = /home/%D/%U
+    template shell = /bin/bash
+    client use spnego = yes
+    client ntlmv2 auth = yes
+    restrict anonymous = 2
+";
+    
+    # Write smb.conf to container
+    my $temp_file = "/tmp/smb.conf.$$";
+    open(my $fh, '>', $temp_file) or die "Cannot create temp smb.conf: $!";
+    print $fh $smb_conf;
+    close $fh;
+    
+    run_command(['pct', 'push', $container_id, $temp_file, '/etc/samba/smb.conf']);
+    unlink $temp_file;
+    
+    # Join domain
+    my $join_cmd = "net ads join -U $username%$password";
+    if ($ou) {
+        $join_cmd .= " -s $ou";
+    }
+    
+    my $join_result = `pct exec $container_id -- $join_cmd 2>&1`;
+    if ($join_result =~ /Joined/) {
+        # Start winbind service
+        run_command(['pct', 'exec', $container_id, '--', 'systemctl', 'enable', 'winbind']);
+        run_command(['pct', 'exec', $container_id, '--', 'systemctl', 'start', 'winbind']);
+        
+        return {
+            success => 1,
+            message => "Successfully joined domain $domain",
+            realm => uc($domain),
+            workgroup => uc((split /\./, $domain)[0])
+        };
+    } else {
+        if ($fallback) {
+            warn "Domain join failed: $join_result, using fallback authentication";
+            return _setup_fallback_auth_lxc($container_id);
+        } else {
+            die "Domain join failed: $join_result";
+        }
+    }
+}
+
+sub _join_ad_domain_vm {
+    my ($vm_id, $domain, $username, $password, $ou, $fallback) = @_;
+    
+    # Get VM IP
+    my $vm_ip = _wait_for_vm_ip($vm_id);
+    unless ($vm_ip) {
+        die "Cannot get VM IP address for domain join";
+    }
+    
+    # Install required packages in VM
+    my $ssh_cmd = "ssh -o StrictHostKeyChecking=no root\@$vm_ip";
+    run_command([$ssh_cmd, 'apt-get', 'update']);
+    run_command([$ssh_cmd, 'apt-get', 'install', '-y', 'samba', 'winbind', 'krb5-user', 'libpam-krb5']);
+    
+    # Configure Samba for AD join
+    my $smb_conf = "
+[global]
+    workgroup = " . uc((split /\./, $domain)[0]) . "
+    realm = " . uc($domain) . "
+    security = ads
+    encrypt passwords = yes
+    password server = $domain
+    idmap config * : backend = tdb
+    idmap config * : range = 10000-20000
+    winbind use default domain = yes
+    winbind enum users = yes
+    winbind enum groups = yes
+    template homedir = /home/%D/%U
+    template shell = /bin/bash
+    client use spnego = yes
+    client ntlmv2 auth = yes
+    restrict anonymous = 2
+";
+    
+    # Write smb.conf to VM
+    run_command([$ssh_cmd, 'cat > /etc/samba/smb.conf << EOF' . $smb_conf . 'EOF']);
+    
+    # Join domain
+    my $join_cmd = "net ads join -U $username%$password";
+    if ($ou) {
+        $join_cmd .= " -s $ou";
+    }
+    
+    my $join_result = `$ssh_cmd '$join_cmd' 2>&1`;
+    if ($join_result =~ /Joined/) {
+        # Start winbind service
+        run_command([$ssh_cmd, 'systemctl', 'enable', 'winbind']);
+        run_command([$ssh_cmd, 'systemctl', 'start', 'winbind']);
+        
+        return {
+            success => 1,
+            message => "Successfully joined domain $domain",
+            realm => uc($domain),
+            workgroup => uc((split /\./, $domain)[0])
+        };
+    } else {
+        if ($fallback) {
+            warn "Domain join failed: $join_result, using fallback authentication";
+            return _setup_fallback_auth_vm($vm_id, $vm_ip);
+        } else {
+            die "Domain join failed: $join_result";
+        }
+    }
+}
+
+sub _join_ad_domain_native {
+    my ($domain, $username, $password, $ou, $fallback) = @_;
+    
+    # Install required packages
+    run_command(['apt-get', 'update']);
+    run_command(['apt-get', 'install', '-y', 'samba', 'winbind', 'krb5-user', 'libpam-krb5']);
+    
+    # Configure Samba for AD join
+    my $smb_conf = "
+[global]
+    workgroup = " . uc((split /\./, $domain)[0]) . "
+    realm = " . uc($domain) . "
+    security = ads
+    encrypt passwords = yes
+    password server = $domain
+    idmap config * : backend = tdb
+    idmap config * : range = 10000-20000
+    winbind use default domain = yes
+    winbind enum users = yes
+    winbind enum groups = yes
+    template homedir = /home/%D/%U
+    template shell = /bin/bash
+    client use spnego = yes
+    client ntlmv2 auth = yes
+    restrict anonymous = 2
+";
+    
+    # Write smb.conf
+    open(my $fh, '>', '/etc/samba/smb.conf') or die "Cannot write /etc/samba/smb.conf: $!";
+    print $fh $smb_conf;
+    close $fh;
+    
+    # Join domain
+    my $join_cmd = "net ads join -U $username%$password";
+    if ($ou) {
+        $join_cmd .= " -s $ou";
+    }
+    
+    my $join_result = `$join_cmd 2>&1`;
+    if ($join_result =~ /Joined/) {
+        # Start winbind service
+        run_command(['systemctl', 'enable', 'winbind']);
+        run_command(['systemctl', 'start', 'winbind']);
+        
+        return {
+            success => 1,
+            message => "Successfully joined domain $domain",
+            realm => uc($domain),
+            workgroup => uc((split /\./, $domain)[0])
+        };
+    } else {
+        if ($fallback) {
+            warn "Domain join failed: $join_result, using fallback authentication";
+            return _setup_fallback_auth_native();
+        } else {
+            die "Domain join failed: $join_result";
+        }
+    }
+}
+
+sub _configure_samba_ad {
+    my ($share, $domain, $dc_info, $fallback) = @_;
+    
+    my $share_config = "
+[$share]
+    path = /srv/smb/$share
+    browseable = yes
+    writable = yes
+    guest ok = no
+    read only = no
+    security = ads
+    realm = $dc_info->{realm}
+    workgroup = $dc_info->{workgroup}
+    idmap config * : backend = tdb
+    idmap config * : range = 10000-20000
+    winbind use default domain = yes
+    winbind enum users = yes
+    winbind enum groups = yes
+    template homedir = /home/%D/%U
+    template shell = /bin/bash
+    client use spnego = yes
+    client ntlmv2 auth = yes
+    restrict anonymous = 2
+";
+    
+    # Add to existing smb.conf
+    open(my $fh, '>>', '/etc/samba/smb.conf') or die "Cannot append to /etc/samba/smb.conf: $!";
+    print $fh $share_config;
+    close $fh;
+    
+    # Reload Samba configuration
+    run_command(['systemctl', 'reload', 'smbd']);
+    run_command(['systemctl', 'reload', 'nmbd']);
+}
+
+sub _setup_fallback_auth {
+    my ($share, $rollback_steps) = @_;
+    
+    # Create local user for fallback authentication
+    my $fallback_user = "smb_$share";
+    my $fallback_password = `openssl rand -base64 12`;
+    chomp $fallback_password;
+    
+    # Add user to system
+    run_command(['useradd', '-m', '-s', '/bin/bash', $fallback_user]);
+    run_command(['echo', "$fallback_user:$fallback_password", '|', 'chpasswd']);
+    
+    # Add to rollback steps
+    push @$rollback_steps, ['remove_user', $fallback_user];
+    
+    # Configure Samba for local authentication
+    my $fallback_config = "
+[$share]
+    path = /srv/smb/$share
+    browseable = yes
+    writable = yes
+    guest ok = no
+    read only = no
+    security = user
+    valid users = $fallback_user
+    create mask = 0644
+    directory mask = 0755
+";
+    
+    # Add to existing smb.conf
+    open(my $fh, '>>', '/etc/samba/smb.conf') or die "Cannot append to /etc/samba/smb.conf: $!";
+    print $fh $fallback_config;
+    close $fh;
+    
+    # Add Samba user
+    run_command(['smbpasswd', '-a', $fallback_user]);
+    run_command(['smbpasswd', '-e', $fallback_user]);
+    
+    # Reload Samba configuration
+    run_command(['systemctl', 'reload', 'smbd']);
+    run_command(['systemctl', 'reload', 'nmbd']);
+    
+    return {
+        success => 1,
+        message => "Fallback authentication configured for user $fallback_user",
+        fallback_user => $fallback_user,
+        fallback_password => $fallback_password
+    };
+}
+
+# -------- VM mode implementations --------
 sub _vm_create {
     my ($path, $share, $quota, $ad_domain, $ctdb_vip, $vm_memory, $vm_cores, $rollback_steps) = @_;
     
@@ -1633,50 +2071,68 @@ ctdb socket = /var/run/ctdb/ctdbd.socket
 }
 
 sub _join_ad_domain_vm {
-    my ($vmid, $vm_ip, $domain, $username, $password, $ou, $fallback) = @_;
+    my ($vm_id, $domain, $username, $password, $ou, $fallback) = @_;
     
-    my $ssh_cmd = "ssh -o StrictHostKeyChecking=no root\@$vm_ip";
-    
-    # Install AD integration packages
-    run_command([$ssh_cmd, 'apt-get', 'install', '-y', 'realmd', 'sssd', 'sssd-tools', 'libnss-sss', 'libpam-sss', 'adcli', 'samba-common-bin']);
-    
-    # Discover domain
-    my $realm_output = `$ssh_cmd realm discover $domain 2>/dev/null`;
-    unless ($realm_output =~ /domain-name:\s*(\S+)/) {
-        die "Failed to discover domain: $domain";
+    # Get VM IP
+    my $vm_ip = _wait_for_vm_ip($vm_id);
+    unless ($vm_ip) {
+        die "Cannot get VM IP address for domain join";
     }
     
-    my $realm = uc($1);
-    my $workgroup = uc(substr($domain, 0, index($domain, '.')));
+    # Install required packages in VM
+    my $ssh_cmd = "ssh -o StrictHostKeyChecking=no root\@$vm_ip";
+    run_command([$ssh_cmd, 'apt-get', 'update']);
+    run_command([$ssh_cmd, 'apt-get', 'install', '-y', 'samba', 'winbind', 'krb5-user', 'libpam-krb5']);
+    
+    # Configure Samba for AD join
+    my $smb_conf = "
+[global]
+    workgroup = " . uc((split /\./, $domain)[0]) . "
+    realm = " . uc($domain) . "
+    security = ads
+    encrypt passwords = yes
+    password server = $domain
+    idmap config * : backend = tdb
+    idmap config * : range = 10000-20000
+    winbind use default domain = yes
+    winbind enum users = yes
+    winbind enum groups = yes
+    template homedir = /home/%D/%U
+    template shell = /bin/bash
+    client use spnego = yes
+    client ntlmv2 auth = yes
+    restrict anonymous = 2
+";
+    
+    # Write smb.conf to VM
+    run_command([$ssh_cmd, 'cat > /etc/samba/smb.conf << EOF' . $smb_conf . 'EOF']);
     
     # Join domain
-    my $join_cmd = "$ssh_cmd realm join --user=$username";
-    $join_cmd .= " --computer-ou='$ou'" if $ou;
-    $join_cmd .= " $domain";
-    
-    # Use expect to handle password prompt
-    my $expect_script = "
-expect -c '
-spawn $join_cmd
-expect \"Password for $username:\"
-send \"$password\\r\"
-expect eof
-'";
-    
-    my $join_result = system($expect_script);
-    if ($join_result != 0) {
-        if ($fallback) {
-            warn "Domain join failed, continuing with fallback authentication";
-        } else {
-            die "Failed to join domain: $domain";
-        }
+    my $join_cmd = "net ads join -U $username%$password";
+    if ($ou) {
+        $join_cmd .= " -s $ou";
     }
     
-    return {
-        realm => $realm,
-        workgroup => $workgroup,
-        domain => $domain
-    };
+    my $join_result = `$ssh_cmd '$join_cmd' 2>&1`;
+    if ($join_result =~ /Joined/) {
+        # Start winbind service
+        run_command([$ssh_cmd, 'systemctl', 'enable', 'winbind']);
+        run_command([$ssh_cmd, 'systemctl', 'start', 'winbind']);
+        
+        return {
+            success => 1,
+            message => "Successfully joined domain $domain",
+            realm => uc($domain),
+            workgroup => uc((split /\./, $domain)[0])
+        };
+    } else {
+        if ($fallback) {
+            warn "Domain join failed: $join_result, using fallback authentication";
+            return _setup_fallback_auth_vm($vm_id, $vm_ip);
+        } else {
+            die "Domain join failed: $join_result";
+        }
+    }
 }
 
 # -------- CTDB High Availability methods --------
@@ -2136,271 +2592,6 @@ expect eof
         realm => $realm,
         workgroup => $workgroup,
         domain => $domain
-    };
-}
-
-1;# 
--------- quota monitoring methods --------
-sub _get_zfs_quota_usage {
-    my ($path) = @_;
-    
-    # Get ZFS dataset name
-    my $dataset = `zfs list | grep "$path" | awk '{print \$1}'`;
-    chomp $dataset;
-    
-    return undef unless $dataset;
-    
-    # Get quota and used space
-    my $quota_output = `zfs get -H quota,used $dataset 2>/dev/null`;
-    my ($quota_line, $used_line) = split /\n/, $quota_output;
-    
-    return undef unless $quota_line && $used_line;
-    
-    my (undef, undef, $quota_str) = split /\t/, $quota_line;
-    my (undef, undef, $used_str) = split /\t/, $used_line;
-    
-    return undef if $quota_str eq 'none' || $quota_str eq '-';
-    
-    # Convert to bytes
-    my $quota_bytes = _parse_size_string($quota_str);
-    my $used_bytes = _parse_size_string($used_str);
-    
-    return undef unless $quota_bytes && $used_bytes;
-    
-    my $percent = int(($used_bytes / $quota_bytes) * 100);
-    
-    return {
-        quota => $quota_str,
-        used => $used_str,
-        quota_bytes => $quota_bytes,
-        used_bytes => $used_bytes,
-        percent => $percent
-    };
-}
-
-sub _get_xfs_quota_usage {
-    my ($path) = @_;
-    
-    # Get mount point
-    my $mount_point = `df "$path" | tail -1 | awk '{print \$6}'`;
-    chomp $mount_point;
-    
-    # Check if xfs_quota is available
-    return undef unless system('which xfs_quota >/dev/null 2>&1') == 0;
-    
-    # Get project quota information
-    my $quota_output = `xfs_quota -x -c "report -p" "$mount_point" 2>/dev/null`;
-    
-    # Parse quota output to find our path
-    foreach my $line (split /\n/, $quota_output) {
-        if ($line =~ /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/) {
-            my ($project_id, $used_kb, $soft_kb, $hard_kb) = ($1, $2, $3, $4);
-            
-            # Check if this project matches our path
-            my $project_path = `grep "^$project_id:" /etc/projects 2>/dev/null | cut -d: -f2`;
-            chomp $project_path;
-            
-            if ($project_path eq $path) {
-                my $quota_bytes = $hard_kb * 1024;
-                my $used_bytes = $used_kb * 1024;
-                my $percent = $quota_bytes > 0 ? int(($used_bytes / $quota_bytes) * 100) : 0;
-                
-                return {
-                    quota => _format_size($quota_bytes),
-                    used => _format_size($used_bytes),
-                    quota_bytes => $quota_bytes,
-                    used_bytes => $used_bytes,
-                    percent => $percent
-                };
-            }
-        }
-    }
-    
-    return undef;
-}
-
-sub _get_user_quota_usage {
-    my ($path) = @_;
-    
-    # Check if quota tools are available
-    return undef unless system('which quota >/dev/null 2>&1') == 0;
-    
-    # Get mount point
-    my $mount_point = `df "$path" | tail -1 | awk '{print \$6}'`;
-    chomp $mount_point;
-    
-    # Get user quota for root
-    my $quota_output = `quota -u root 2>/dev/null`;
-    
-    # Parse quota output
-    foreach my $line (split /\n/, $quota_output) {
-        if ($line =~ /^\s*(\S+)\s+(\d+)\s+(\d+)\s+(\d+)/) {
-            my ($filesystem, $used_kb, $soft_kb, $hard_kb) = ($1, $2, $3, $4);
-            
-            if ($filesystem eq $mount_point) {
-                my $quota_bytes = $hard_kb * 1024;
-                my $used_bytes = $used_kb * 1024;
-                my $percent = $quota_bytes > 0 ? int(($used_bytes / $quota_bytes) * 100) : 0;
-                
-                return {
-                    quota => _format_size($quota_bytes),
-                    used => _format_size($used_bytes),
-                    quota_bytes => $quota_bytes,
-                    used_bytes => $used_bytes,
-                    percent => $percent
-                };
-            }
-        }
-    }
-    
-    return undef;
-}
-
-sub _parse_size_string {
-    my ($size_str) = @_;
-    
-    return 0 unless $size_str;
-    
-    if ($size_str =~ /^(\d+(?:\.\d+)?)([KMGT]?)$/) {
-        my ($num, $unit) = ($1, $2);
-        
-        if ($unit eq 'K') {
-            return int($num * 1024);
-        } elsif ($unit eq 'M') {
-            return int($num * 1024**2);
-        } elsif ($unit eq 'G') {
-            return int($num * 1024**3);
-        } elsif ($unit eq 'T') {
-            return int($num * 1024**4);
-        } else {
-            return int($num);
-        }
-    }
-    
-    return 0;
-}
-
-sub _format_size {
-    my ($bytes) = @_;
-    
-    return '0' unless $bytes;
-    
-    if ($bytes >= 1024**4) {
-        return sprintf("%.1fT", $bytes / (1024**4));
-    } elsif ($bytes >= 1024**3) {
-        return sprintf("%.1fG", $bytes / (1024**3));
-    } elsif ($bytes >= 1024**2) {
-        return sprintf("%.1fM", $bytes / (1024**2));
-    } elsif ($bytes >= 1024) {
-        return sprintf("%.1fK", $bytes / 1024);
-    } else {
-        return "${bytes}B";
-    }
-}
-
-sub _update_quota_history {
-    my ($path, $used_bytes, $percent) = @_;
-    
-    # Create history directory if it doesn't exist
-    my $history_dir = "/etc/pve/smbgateway/history";
-    unless (-d $history_dir) {
-        eval { 
-            mkdir $history_dir;
-        };
-        return if $@;
-    }
-    
-    # Create history file
-    my $history_file = "$history_dir/" . _path_to_filename($path) . ".history";
-    
-    eval {
-        # Read existing history
-        my @history = ();
-        if (-f $history_file) {
-            open my $fh, '<', $history_file or die "Cannot read $history_file: $!";
-            @history = <$fh>;
-            close $fh;
-        }
-        
-        # Add new entry
-        my $timestamp = time();
-        push @history, "$timestamp,$used_bytes,$percent\n";
-        
-        # Keep only last 100 entries
-        if (@history > 100) {
-            @history = @history[-100..-1];
-        }
-        
-        # Write back to file
-        open my $fh, '>', $history_file or die "Cannot write to $history_file: $!";
-        print $fh @history;
-        close $fh;
-    };
-    
-    if ($@) {
-        warn "Failed to update quota history: $@";
-    }
-}
-
-sub _get_quota_trend {
-    my ($path) = @_;
-    
-    # Get history file path
-    my $history_dir = "/etc/pve/smbgateway/history";
-    my $history_file = "$history_dir/" . _path_to_filename($path) . ".history";
-    
-    # Check if file exists
-    return undef unless -f $history_file;
-    
-    # Read history
-    my @history = ();
-    eval {
-        open my $fh, '<', $history_file or die "Cannot read $history_file: $!";
-        @history = <$fh>;
-        close $fh;
-    };
-    
-    return undef if $@ || @history < 2;
-    
-    # Parse history entries
-    my @entries = ();
-    foreach my $line (@history) {
-        chomp $line;
-        my ($timestamp, $used_bytes, $percent) = split /,/, $line;
-        push @entries, {
-            timestamp => $timestamp,
-            used_bytes => $used_bytes,
-            percent => $percent
-        };
-    }
-    
-    # Calculate trend over last 24 hours
-    my $now = time();
-    my $day_ago = $now - (24 * 60 * 60);
-    
-    my @recent_entries = grep { $_->{timestamp} >= $day_ago } @entries;
-    return undef if @recent_entries < 2;
-    
-    # Calculate average change per hour
-    my $first_entry = $recent_entries[0];
-    my $last_entry = $recent_entries[-1];
-    
-    my $time_diff = $last_entry->{timestamp} - $first_entry->{timestamp};
-    return undef if $time_diff <= 0;
-    
-    my $percent_change = $last_entry->{percent} - $first_entry->{percent};
-    my $bytes_change = $last_entry->{used_bytes} - $first_entry->{used_bytes};
-    
-    my $hours = $time_diff / 3600;
-    my $percent_per_hour = $percent_change / $hours;
-    my $bytes_per_hour = $bytes_change / $hours;
-    
-    return {
-        percent_per_hour => sprintf("%.2f", $percent_per_hour),
-        bytes_per_hour => $bytes_per_hour,
-        direction => $percent_change > 0 ? 'increasing' : ($percent_change < 0 ? 'decreasing' : 'stable'),
-        data_points => scalar(@recent_entries),
-        time_span_hours => sprintf("%.1f", $hours)
     };
 }
 
