@@ -1,3 +1,40 @@
+# PVE SMB Gateway Plugin - Debian Package Installation
+# Copyright (C) 2025 Eric Henderson <eric@gozippy.com>
+
+# Main plugin files
 PVE/Storage/Custom/SMBGateway.pm usr/share/perl5/PVE/Storage/Custom/
+PVE/SMBGateway/Monitor.pm usr/share/perl5/PVE/SMBGateway/
+PVE/SMBGateway/Backup.pm usr/share/perl5/PVE/SMBGateway/
+PVE/SMBGateway/Security.pm usr/share/perl5/PVE/SMBGateway/
+PVE/SMBGateway/CLI.pm usr/share/perl5/PVE/SMBGateway/
+
+# Web interface files
 www/ext6/pvemanager6/smb-gateway.js usr/share/pve-manager/ext6/pvemanager6/
-scripts/lxc_setup.sh usr/share/pve-smbgateway/ 
+
+# CLI tools
+sbin/pve-smbgateway usr/sbin/
+sbin/pve-smbgateway-enhanced usr/sbin/
+
+# Scripts and utilities
+scripts/build_package.sh usr/share/pve-smbgateway/
+scripts/lxc_setup.sh usr/share/pve-smbgateway/
+scripts/create_vm_template.sh usr/share/pve-smbgateway/
+scripts/test_integration.sh usr/share/pve-smbgateway/
+scripts/test_security.sh usr/share/pve-smbgateway/
+scripts/test_enhanced_cli.sh usr/share/pve-smbgateway/
+scripts/test_integration_comprehensive.sh usr/share/pve-smbgateway/
+scripts/test_performance_benchmarks.sh usr/share/pve-smbgateway/
+scripts/release_validation.sh usr/share/pve-smbgateway/
+scripts/prepare_v1_release.sh usr/share/pve-smbgateway/
+scripts/comprehensive_test.sh usr/share/pve-smbgateway/
+
+# Documentation
+README.md usr/share/doc/pve-smbgateway/
+docs/ usr/share/doc/pve-smbgateway/
+LICENSE usr/share/doc/pve-smbgateway/
+
+# Unit tests
+t/ usr/share/pve-smbgateway/
+
+# Debian package files
+debian/ usr/share/pve-smbgateway/debian/ 

@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+# Stop and disable the metrics collection timer
+if [ -x /bin/systemctl ]; then
+    systemctl stop pve-smbgateway-metrics.timer || true
+    systemctl disable pve-smbgateway-metrics.timer || true
+    systemctl daemon-reload
+fi
+
+exit 0 

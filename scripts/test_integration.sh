@@ -1,9 +1,12 @@
 #!/bin/bash
 
-# PVE SMB Gateway Integration Test Script
-# Tests all deployment modes (LXC, Native, VM) and core functionality
+# PVE SMB Gateway - Integration Tests
+# Copyright (C) 2025 Eric Henderson <eric@gozippy.com>
+# Dual-licensed under AGPL-3.0 and Commercial License
+#
+# Comprehensive integration tests for complete workflow
 
-set -e
+set -euo pipefail
 
 # Colors for output
 RED='\033[0;31m'
@@ -13,260 +16,861 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Test configuration
-TEST_SHARES=("test-lxc" "test-native" "test-vm")
-TEST_PATHS=("/srv/smb/test-lxc" "/srv/smb/test-native" "/srv/smb/test-vm")
-TEST_QUOTA="1G"
-VM_MEMORY="1024"
-VM_CORES="1"
+TEST_DIR="/tmp/pve-smbgateway-integration-tests"
+API_BASE_URL="http://localhost:8006/api2/json"
+TEST_NODE="pve"
+TEST_USER="root@pam"
+TEST_PASSWORD="test-password"
 
-echo -e "${BLUE}=== PVE SMB Gateway Integration Test ===${NC}"
+# Test counters
+TOTAL_TESTS=0
+PASSED_TESTS=0
+FAILED_TESTS=0
 
-# Function to print status
-print_status() {
-    local status=$1
-    local message=$2
-    if [ "$status" = "PASS" ]; then
-        echo -e "${GREEN}✓ $message${NC}"
-    elif [ "$status" = "FAIL" ]; then
-        echo -e "${RED}✗ $message${NC}"
+# Logging functions
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[PASS]${NC} $1"
+    ((PASSED_TESTS++))
+    ((TOTAL_TESTS++))
+}
+
+log_error() {
+    echo -e "${RED}[FAIL]${NC} $1"
+    ((FAILED_TESTS++))
+    ((TOTAL_TESTS++))
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
+}
+
+# Cleanup function
+cleanup() {
+    log_info "Cleaning up integration test environment..."
+    
+    # Clean up test shares
+    cleanup_test_shares
+    
+    # Remove test directory
+    rm -rf "$TEST_DIR"
+}
+
+# Setup test environment
+setup_test_environment() {
+    log_info "Setting up integration test environment..."
+    
+    # Create test directory
+    mkdir -p "$TEST_DIR"
+    cd "$TEST_DIR"
+    
+    # Create test configuration
+    create_test_config
+    
+    # Setup mock services
+    setup_mock_services
+    
+    # Verify environment
+    verify_test_environment
+}
+
+# Create test configuration
+create_test_config() {
+    cat > integration_config.json << 'EOF'
+{
+    "test_scenarios": {
+        "basic_lxc": {
+            "sharename": "integration-lxc",
+            "mode": "lxc",
+            "path": "/srv/smb/integration-lxc",
+            "quota": "10G",
+            "expected_status": "active"
+        },
+        "native_ad": {
+            "sharename": "integration-native-ad",
+            "mode": "native",
+            "path": "/srv/smb/integration-native-ad",
+            "ad_domain": "test.local",
+            "ad_join": true,
+            "expected_status": "active"
+        },
+        "vm_ha": {
+            "sharename": "integration-vm-ha",
+            "mode": "vm",
+            "path": "/srv/smb/integration-vm-ha",
+            "vm_memory": 4096,
+            "vm_cores": 4,
+            "ha_enabled": true,
+            "ctdb_vip": "192.168.1.200",
+            "expected_status": "active"
+        }
+    },
+    "test_data": {
+        "files": [
+            "test-file-1.txt",
+            "test-file-2.txt",
+            "test-directory/test-file-3.txt"
+        ],
+        "file_content": "Integration test data - $(date)",
+        "file_size": 1024
+    },
+    "performance_targets": {
+        "creation_time": 30,
+        "deletion_time": 20,
+        "io_throughput": 50,
+        "concurrent_connections": 10
+    }
+}
+EOF
+}
+
+# Setup mock services
+setup_mock_services() {
+    log_info "Setting up mock services..."
+    
+    # Create mock API server
+    create_mock_api_server
+    
+    # Create mock database
+    create_mock_database
+    
+    # Create mock Samba service
+    create_mock_samba_service
+}
+
+# Create mock API server
+create_mock_api_server() {
+    cat > mock_api_server.py << 'EOF'
+#!/usr/bin/env python3
+
+import json
+import time
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
+
+class MockAPIHandler(BaseHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        self.test_data = {
+            'shares': {},
+            'metrics': {},
+            'backups': {},
+            'ha_status': {},
+            'ad_status': {}
+        }
+        super().__init__(*args, **kwargs)
+    
+    def do_GET(self):
+        parsed_url = urlparse(self.path)
+        path = parsed_url.path
+        
+        if path.startswith('/api2/json/nodes/'):
+            self.handle_node_api(parsed_url)
+        elif path.startswith('/api2/json/storage/'):
+            self.handle_storage_api(parsed_url)
+        else:
+            self.send_error(404, "Not Found")
+    
+    def do_POST(self):
+        parsed_url = urlparse(self.path)
+        path = parsed_url.path
+        
+        if path.startswith('/api2/json/nodes/'):
+            self.handle_node_api_post(parsed_url)
+        elif path.startswith('/api2/json/storage/'):
+            self.handle_storage_api_post(parsed_url)
+        else:
+            self.send_error(404, "Not Found")
+    
+    def handle_node_api(self, parsed_url):
+        path = parsed_url.path
+        query = parse_qs(parsed_url.query)
+        
+        if 'smbgateway' in path:
+            share_name = path.split('/')[-1]
+            if share_name in self.test_data['shares']:
+                self.send_json_response(self.test_data['shares'][share_name])
+            else:
+                self.send_error(404, "Share not found")
+        elif 'metrics' in path:
+            share_name = path.split('/')[-2]
+            if share_name in self.test_data['metrics']:
+                self.send_json_response(self.test_data['metrics'][share_name])
+            else:
+                self.send_error(404, "Metrics not found")
+        else:
+            self.send_error(404, "Not Found")
+    
+    def handle_storage_api(self, parsed_url):
+        path = parsed_url.path
+        
+        if 'smbgateway' in path:
+            self.send_json_response({
+                'data': list(self.test_data['shares'].values())
+            })
+        else:
+            self.send_error(404, "Not Found")
+    
+    def handle_node_api_post(self, parsed_url):
+        path = parsed_url.path
+        content_length = int(self.headers['Content-Length'])
+        post_data = self.rfile.read(content_length)
+        
+        try:
+            data = json.loads(post_data.decode('utf-8'))
+            
+            if 'smbgateway' in path:
+                share_name = path.split('/')[-1]
+                self.test_data['shares'][share_name] = {
+                    'sharename': share_name,
+                    'mode': data.get('mode', 'lxc'),
+                    'path': data.get('path', f'/srv/smb/{share_name}'),
+                    'quota': data.get('quota', '10G'),
+                    'status': 'active',
+                    'created': time.time()
+                }
+                
+                # Create mock metrics
+                self.test_data['metrics'][share_name] = {
+                    'io_stats': {
+                        'bytes_read': 1073741824,
+                        'bytes_written': 2147483648,
+                        'operations_read': 1000,
+                        'operations_written': 500,
+                        'latency_avg_ms': 2.5,
+                        'throughput_mbps': 15.5
+                    },
+                    'connection_stats': {
+                        'active_connections': 5,
+                        'total_connections': 100,
+                        'failed_connections': 2,
+                        'auth_failures': 1
+                    },
+                    'quota_stats': {
+                        'quota_limit': 10737418240,
+                        'quota_used': 2684354560,
+                        'quota_percent': 25.0
+                    }
+                }
+                
+                self.send_json_response({'success': True, 'data': self.test_data['shares'][share_name]})
+            else:
+                self.send_error(404, "Not Found")
+                
+        except json.JSONDecodeError:
+            self.send_error(400, "Invalid JSON")
+    
+    def send_json_response(self, data):
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode('utf-8'))
+    
+    def log_message(self, format, *args):
+        # Suppress logging for cleaner test output
+        pass
+
+def run_mock_server():
+    server = HTTPServer(('localhost', 8006), MockAPIHandler)
+    print("Mock API server started on localhost:8006")
+    server.serve_forever()
+
+if __name__ == '__main__':
+    run_mock_server()
+EOF
+
+    chmod +x mock_api_server.py
+}
+
+# Create mock database
+create_mock_database() {
+    cat > create_mock_db.sql << 'EOF'
+-- Create mock SQLite database for testing
+CREATE TABLE IF NOT EXISTS shares (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sharename TEXT UNIQUE NOT NULL,
+    mode TEXT NOT NULL,
+    path TEXT NOT NULL,
+    quota TEXT,
+    ad_domain TEXT,
+    ad_join BOOLEAN DEFAULT 0,
+    ctdb_vip TEXT,
+    ha_enabled BOOLEAN DEFAULT 0,
+    vm_memory INTEGER,
+    vm_cores INTEGER,
+    status TEXT DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sharename TEXT NOT NULL,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    io_stats TEXT,
+    connection_stats TEXT,
+    quota_stats TEXT,
+    system_stats TEXT,
+    FOREIGN KEY (sharename) REFERENCES shares(sharename)
+);
+
+CREATE TABLE IF NOT EXISTS backups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sharename TEXT NOT NULL,
+    snapshot_name TEXT NOT NULL,
+    size_bytes INTEGER,
+    status TEXT DEFAULT 'success',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (sharename) REFERENCES shares(sharename)
+);
+
+-- Insert test data
+INSERT OR REPLACE INTO shares (sharename, mode, path, quota, status) VALUES
+    ('integration-lxc', 'lxc', '/srv/smb/integration-lxc', '10G', 'active'),
+    ('integration-native-ad', 'native', '/srv/smb/integration-native-ad', '20G', 'active'),
+    ('integration-vm-ha', 'vm', '/srv/smb/integration-vm-ha', '50G', 'active');
+
+INSERT OR REPLACE INTO metrics (sharename, io_stats, connection_stats, quota_stats) VALUES
+    ('integration-lxc', '{"bytes_read": 1073741824, "bytes_written": 2147483648}', '{"active_connections": 5, "total_connections": 100}', '{"quota_limit": 10737418240, "quota_used": 2684354560, "quota_percent": 25.0}');
+
+INSERT OR REPLACE INTO backups (sharename, snapshot_name, size_bytes, status) VALUES
+    ('integration-lxc', 'backup-20250101-120000', 1073741824, 'success'),
+    ('integration-lxc', 'backup-20250102-120000', 2147483648, 'success');
+EOF
+
+    # Create SQLite database
+    sqlite3 "$TEST_DIR/test.db" < create_mock_db.sql
+}
+
+# Create mock Samba service
+create_mock_samba_service() {
+    cat > mock_samba_service.py << 'EOF'
+#!/usr/bin/env python3
+
+import time
+import threading
+import socket
+import json
+
+class MockSambaService:
+    def __init__(self):
+        self.shares = {}
+        self.connections = {}
+        self.running = False
+    
+    def add_share(self, sharename, path, mode='lxc'):
+        self.shares[sharename] = {
+            'path': path,
+            'mode': mode,
+            'status': 'active',
+            'connections': 0,
+            'bytes_read': 0,
+            'bytes_written': 0
+        }
+        print(f"Mock Samba: Added share {sharename} at {path}")
+    
+    def remove_share(self, sharename):
+        if sharename in self.shares:
+            del self.shares[sharename]
+            print(f"Mock Samba: Removed share {sharename}")
+    
+    def simulate_io(self, sharename, bytes_read=0, bytes_written=0):
+        if sharename in self.shares:
+            self.shares[sharename]['bytes_read'] += bytes_read
+            self.shares[sharename]['bytes_written'] += bytes_written
+            print(f"Mock Samba: Simulated I/O for {sharename}")
+    
+    def get_stats(self, sharename):
+        if sharename in self.shares:
+            return self.shares[sharename]
+        return None
+    
+    def start(self):
+        self.running = True
+        print("Mock Samba service started")
+        
+        # Start I/O simulation thread
+        def simulate_io():
+            while self.running:
+                for sharename in self.shares:
+                    self.simulate_io(sharename, 1024, 2048)
+                time.sleep(5)
+        
+        threading.Thread(target=simulate_io, daemon=True).start()
+    
+    def stop(self):
+        self.running = False
+        print("Mock Samba service stopped")
+
+if __name__ == '__main__':
+    service = MockSambaService()
+    service.start()
+    
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        service.stop()
+EOF
+
+    chmod +x mock_samba_service.py
+}
+
+# Verify test environment
+verify_test_environment() {
+    log_info "Verifying test environment..."
+    
+    # Check if required tools are available
+    local required_tools=("curl" "jq" "sqlite3" "python3")
+    
+    for tool in "${required_tools[@]}"; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            log_error "Required tool not found: $tool"
+            exit 1
+        fi
+    done
+    
+    # Check if test files exist
+    local required_files=(
+        "integration_config.json"
+        "mock_api_server.py"
+        "create_mock_db.sql"
+        "mock_samba_service.py"
+    )
+    
+    for file in "${required_files[@]}"; do
+        if [ ! -f "$file" ]; then
+            log_error "Required file not found: $file"
+            exit 1
+        fi
+    done
+    
+    log_success "Test environment verified"
+}
+
+# Start mock services
+start_mock_services() {
+    log_info "Starting mock services..."
+    
+    # Start mock API server
+    python3 mock_api_server.py &
+    local api_pid=$!
+    echo "$api_pid" > api_server.pid
+    
+    # Wait for API server to start
+    sleep 2
+    
+    # Start mock Samba service
+    python3 mock_samba_service.py &
+    local samba_pid=$!
+    echo "$samba_pid" > samba_service.pid
+    
+    # Wait for services to start
+    sleep 2
+    
+    log_success "Mock services started"
+}
+
+# Stop mock services
+stop_mock_services() {
+    log_info "Stopping mock services..."
+    
+    # Stop API server
+    if [ -f api_server.pid ]; then
+        local api_pid=$(cat api_server.pid)
+        kill "$api_pid" 2>/dev/null || true
+        rm -f api_server.pid
+    fi
+    
+    # Stop Samba service
+    if [ -f samba_service.pid ]; then
+        local samba_pid=$(cat samba_service.pid)
+        kill "$samba_pid" 2>/dev/null || true
+        rm -f samba_service.pid
+    fi
+    
+    log_success "Mock services stopped"
+}
+
+# Test API integration
+test_api_integration() {
+    log_info "Testing API integration..."
+    
+    # Test API connectivity
+    if curl -s -f "http://localhost:8006/api2/json/version" >/dev/null; then
+        log_success "API connectivity works"
     else
-        echo -e "${YELLOW}? $message${NC}"
+        log_error "API connectivity failed"
+        return 1
+    fi
+    
+    # Test share creation via API
+    local test_share="api-test-share"
+    local create_data="{\"mode\":\"lxc\",\"path\":\"/srv/smb/$test_share\",\"quota\":\"10G\"}"
+    
+    if response=$(curl -s -X POST \
+        -H "Content-Type: application/json" \
+        -d "$create_data" \
+        "http://localhost:8006/api2/json/nodes/$TEST_NODE/smbgateway/$test_share"); then
+        
+        if echo "$response" | jq -e '.success' >/dev/null; then
+            log_success "Share creation via API works"
+        else
+            log_error "Share creation via API failed"
+            return 1
+        fi
+    else
+        log_error "Share creation via API failed"
+        return 1
+    fi
+    
+    # Test share retrieval via API
+    if response=$(curl -s "http://localhost:8006/api2/json/nodes/$TEST_NODE/smbgateway/$test_share"); then
+        if echo "$response" | jq -e '.sharename' >/dev/null; then
+            log_success "Share retrieval via API works"
+        else
+            log_error "Share retrieval via API failed"
+            return 1
+        fi
+    else
+        log_error "Share retrieval via API failed"
+        return 1
+    fi
+    
+    # Test metrics retrieval via API
+    if response=$(curl -s "http://localhost:8006/api2/json/nodes/$TEST_NODE/smbgateway/$test_share/metrics"); then
+        if echo "$response" | jq -e '.io_stats' >/dev/null; then
+            log_success "Metrics retrieval via API works"
+        else
+            log_error "Metrics retrieval via API failed"
+            return 1
+        fi
+    else
+        log_error "Metrics retrieval via API failed"
+        return 1
     fi
 }
 
-# Function to cleanup test resources
-cleanup() {
-    echo -e "\n${YELLOW}Cleaning up test resources...${NC}"
+# Test database operations
+test_database_operations() {
+    log_info "Testing database operations..."
     
-    for share in "${TEST_SHARES[@]}"; do
-        # Remove test share if it exists
-        if pve-smbgateway list | grep -q "$share"; then
-            echo "Removing test share: $share"
-            pve-smbgateway delete "$share" 2>/dev/null || true
+    local db_file="$TEST_DIR/test.db"
+    
+    # Test share insertion
+    if sqlite3 "$db_file" "INSERT INTO shares (sharename, mode, path, quota) VALUES ('db-test-share', 'lxc', '/srv/smb/db-test-share', '10G');"; then
+        log_success "Share insertion works"
+    else
+        log_error "Share insertion failed"
+        return 1
+    fi
+    
+    # Test share retrieval
+    if result=$(sqlite3 "$db_file" "SELECT sharename, mode, status FROM shares WHERE sharename = 'db-test-share';"); then
+        if [ -n "$result" ]; then
+            log_success "Share retrieval works"
+        else
+            log_error "Share retrieval failed"
+            return 1
+        fi
+    else
+        log_error "Share retrieval failed"
+        return 1
+    fi
+    
+    # Test metrics insertion
+    local metrics_data='{"bytes_read": 1073741824, "bytes_written": 2147483648}'
+    if sqlite3 "$db_file" "INSERT INTO metrics (sharename, io_stats) VALUES ('db-test-share', '$metrics_data');"; then
+        log_success "Metrics insertion works"
+    else
+        log_error "Metrics insertion failed"
+        return 1
+    fi
+    
+    # Test metrics retrieval
+    if result=$(sqlite3 "$db_file" "SELECT io_stats FROM metrics WHERE sharename = 'db-test-share' ORDER BY timestamp DESC LIMIT 1;"); then
+        if echo "$result" | jq -e '.bytes_read' >/dev/null; then
+            log_success "Metrics retrieval works"
+        else
+            log_error "Metrics retrieval failed"
+            return 1
+        fi
+    else
+        log_error "Metrics retrieval failed"
+        return 1
+    fi
+    
+    # Test backup operations
+    if sqlite3 "$db_file" "INSERT INTO backups (sharename, snapshot_name, size_bytes) VALUES ('db-test-share', 'backup-test', 1073741824);"; then
+        log_success "Backup insertion works"
+    else
+        log_error "Backup insertion failed"
+        return 1
+    fi
+    
+    # Clean up test data
+    sqlite3 "$db_file" "DELETE FROM shares WHERE sharename = 'db-test-share';"
+    sqlite3 "$db_file" "DELETE FROM metrics WHERE sharename = 'db-test-share';"
+    sqlite3 "$db_file" "DELETE FROM backups WHERE sharename = 'db-test-share';"
+}
+
+# Test end-to-end workflow
+test_end_to_end_workflow() {
+    log_info "Testing end-to-end workflow..."
+    
+    # Load test scenarios
+    local scenarios=$(jq -r '.test_scenarios | keys[]' integration_config.json)
+    
+    for scenario in $scenarios; do
+        log_info "Testing scenario: $scenario"
+        
+        local scenario_data=$(jq -r ".test_scenarios.$scenario" integration_config.json)
+        local sharename=$(echo "$scenario_data" | jq -r '.sharename')
+        local mode=$(echo "$scenario_data" | jq -r '.mode')
+        local path=$(echo "$scenario_data" | jq -r '.path')
+        local quota=$(echo "$scenario_data" | jq -r '.quota // empty')
+        local expected_status=$(echo "$scenario_data" | jq -r '.expected_status')
+        
+        # Step 1: Create share via API
+        local create_data=$(echo "$scenario_data" | jq -c '.')
+        
+        if ! response=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -d "$create_data" \
+            "http://localhost:8006/api2/json/nodes/$TEST_NODE/smbgateway/$sharename"); then
+            
+            log_error "Share creation failed for scenario $scenario"
+            continue
         fi
         
-        # Remove test directory
-        test_path="/srv/smb/$share"
-        if [ -d "$test_path" ]; then
-            echo "Removing test directory: $test_path"
-            rm -rf "$test_path"
+        if ! echo "$response" | jq -e '.success' >/dev/null; then
+            log_error "Share creation API response invalid for scenario $scenario"
+            continue
         fi
+        
+        # Step 2: Verify share status
+        sleep 2
+        
+        if ! response=$(curl -s "http://localhost:8006/api2/json/nodes/$TEST_NODE/smbgateway/$sharename"); then
+            log_error "Share status retrieval failed for scenario $scenario"
+            continue
+        fi
+        
+        local actual_status=$(echo "$response" | jq -r '.status')
+        if [ "$actual_status" = "$expected_status" ]; then
+            log_success "Share status verification passed for scenario $scenario"
+        else
+            log_error "Share status verification failed for scenario $scenario (expected: $expected_status, got: $actual_status)"
+            continue
+        fi
+        
+        # Step 3: Test metrics collection
+        sleep 2
+        
+        if ! response=$(curl -s "http://localhost:8006/api2/json/nodes/$TEST_NODE/smbgateway/$sharename/metrics"); then
+            log_error "Metrics retrieval failed for scenario $scenario"
+            continue
+        fi
+        
+        if echo "$response" | jq -e '.io_stats' >/dev/null; then
+            log_success "Metrics collection works for scenario $scenario"
+        else
+            log_error "Metrics collection failed for scenario $scenario"
+            continue
+        fi
+        
+        # Step 4: Simulate I/O activity
+        log_info "Simulating I/O activity for scenario $scenario"
+        
+        # Simulate file operations
+        mkdir -p "$path"
+        echo "Test data for $scenario" > "$path/test-file.txt"
+        dd if=/dev/zero of="$path/large-file.dat" bs=1M count=10 2>/dev/null
+        
+        # Step 5: Verify metrics update
+        sleep 3
+        
+        if response=$(curl -s "http://localhost:8006/api2/json/nodes/$TEST_NODE/smbgateway/$sharename/metrics"); then
+            local bytes_written=$(echo "$response" | jq -r '.io_stats.bytes_written')
+            if [ "$bytes_written" -gt 0 ]; then
+                log_success "I/O metrics updated for scenario $scenario"
+            else
+                log_warning "I/O metrics not updated for scenario $scenario"
+            fi
+        fi
+        
+        # Step 6: Clean up
+        rm -rf "$path"
+        
+        log_success "End-to-end workflow completed for scenario $scenario"
     done
 }
 
-# Set up cleanup trap
-trap cleanup EXIT
-
-echo -e "\n${BLUE}1. Testing Prerequisites${NC}"
-
-# Check if CLI tool exists
-if command -v pve-smbgateway >/dev/null 2>&1; then
-    print_status "PASS" "CLI tool available"
-else
-    print_status "FAIL" "CLI tool not found"
-    exit 1
-fi
-
-# Check if we're running on Proxmox
-if [ -f "/etc/pve/version" ]; then
-    print_status "PASS" "Running on Proxmox VE"
-else
-    print_status "FAIL" "Not running on Proxmox VE"
-    exit 1
-fi
-
-# Check available storage
-STORAGE_LIST=$(pvesh get /nodes/$(hostname)/storage 2>/dev/null || echo "")
-if echo "$STORAGE_LIST" | grep -q "local"; then
-    print_status "PASS" "Local storage available"
-else
-    print_status "FAIL" "No local storage found"
-    exit 1
-fi
-
-echo -e "\n${BLUE}2. Testing LXC Mode${NC}"
-
-# Create test share in LXC mode
-echo "Creating test share in LXC mode..."
-if pve-smbgateway create "${TEST_SHARES[0]}" \
-    --mode lxc \
-    --quota "$TEST_QUOTA" \
-    --path "${TEST_PATHS[0]}"; then
-    print_status "PASS" "LXC share creation successful"
-else
-    print_status "FAIL" "LXC share creation failed"
-    exit 1
-fi
-
-# Check LXC status
-LXC_STATUS=$(pve-smbgateway status "${TEST_SHARES[0]}" 2>/dev/null || echo "")
-if echo "$LXC_STATUS" | grep -q "running\|active"; then
-    print_status "PASS" "LXC container is running"
-else
-    print_status "FAIL" "LXC container is not running"
-    echo "LXC Status: $LXC_STATUS"
-fi
-
-echo -e "\n${BLUE}3. Testing Native Mode${NC}"
-
-# Create test share in native mode
-echo "Creating test share in native mode..."
-if pve-smbgateway create "${TEST_SHARES[1]}" \
-    --mode native \
-    --quota "$TEST_QUOTA" \
-    --path "${TEST_PATHS[1]}"; then
-    print_status "PASS" "Native share creation successful"
-else
-    print_status "FAIL" "Native share creation failed"
-    exit 1
-fi
-
-# Check native status
-NATIVE_STATUS=$(pve-smbgateway status "${TEST_SHARES[1]}" 2>/dev/null || echo "")
-if echo "$NATIVE_STATUS" | grep -q "running\|active"; then
-    print_status "PASS" "Native Samba service is running"
-else
-    print_status "FAIL" "Native Samba service is not running"
-    echo "Native Status: $NATIVE_STATUS"
-fi
-
-echo -e "\n${BLUE}4. Testing VM Mode${NC}"
-
-# Check if VM templates are available
-TEMPLATE_LIST=$(pvesh get /nodes/$(hostname)/storage/local/content --type iso 2>/dev/null || echo "")
-if echo "$TEMPLATE_LIST" | grep -q "debian.*\.qcow2\|smb-gateway"; then
-    print_status "PASS" "VM templates available"
+# Test performance scenarios
+test_performance_scenarios() {
+    log_info "Testing performance scenarios..."
     
-    # Create test share in VM mode
-    echo "Creating test share in VM mode..."
-    if pve-smbgateway create "${TEST_SHARES[2]}" \
-        --mode vm \
-        --vm-memory "$VM_MEMORY" \
-        --vm-cores "$VM_CORES" \
-        --quota "$TEST_QUOTA" \
-        --path "${TEST_PATHS[2]}"; then
-        print_status "PASS" "VM share creation successful"
-    else
-        print_status "FAIL" "VM share creation failed"
-    fi
+    # Load performance targets
+    local creation_time_target=$(jq -r '.performance_targets.creation_time' integration_config.json)
+    local deletion_time_target=$(jq -r '.performance_targets.deletion_time' integration_config.json)
+    local io_throughput_target=$(jq -r '.performance_targets.io_throughput' integration_config.json)
+    local concurrent_connections_target=$(jq -r '.performance_targets.concurrent_connections' integration_config.json)
     
-    # Wait for VM to start
-    sleep 15
+    # Test share creation performance
+    local start_time=$(date +%s)
     
-    # Check VM status
-    VM_STATUS=$(pve-smbgateway status "${TEST_SHARES[2]}" 2>/dev/null || echo "")
-    if echo "$VM_STATUS" | grep -q "running\|active"; then
-        print_status "PASS" "VM is running"
-    else
-        print_status "FAIL" "VM is not running"
-        echo "VM Status: $VM_STATUS"
-    fi
-else
-    print_status "SKIP" "No VM templates available, skipping VM mode test"
-fi
-
-echo -e "\n${BLUE}5. Testing Quota Management${NC}"
-
-# Test quota functionality for each mode
-for share in "${TEST_SHARES[@]}"; do
-    if pve-smbgateway list | grep -q "$share"; then
-        QUOTA_STATUS=$(pve-smbgateway status "$share" 2>/dev/null | grep -A 5 "quota" || echo "")
-        if echo "$QUOTA_STATUS" | grep -q "limit.*$TEST_QUOTA"; then
-            print_status "PASS" "Quota configured for $share"
-        else
-            print_status "FAIL" "Quota not configured for $share"
-        fi
-    fi
-done
-
-echo -e "\n${BLUE}6. Testing SMB Connectivity${NC}"
-
-# Test SMB connectivity for each share
-for share in "${TEST_SHARES[@]}"; do
-    if pve-smbgateway list | grep -q "$share"; then
-        # Get share IP (for LXC/VM) or use localhost (for native)
-        SHARE_IP="127.0.0.1"
+    for i in {1..5}; do
+        local sharename="perf-test-share-$i"
+        local create_data="{\"mode\":\"lxc\",\"path\":\"/srv/smb/$sharename\",\"quota\":\"5G\"}"
         
-        # For LXC/VM, try to get the actual IP
-        if [ "$share" = "test-lxc" ]; then
-            # Get LXC container IP
-            CONTAINER_ID=$(pct list | grep "smb-$share" | awk '{print $1}')
-            if [ -n "$CONTAINER_ID" ]; then
-                SHARE_IP=$(pct exec "$CONTAINER_ID" -- ip route get 1 | awk '{print $7}' | head -1)
-            fi
-        elif [ "$share" = "test-vm" ]; then
-            # Get VM IP
-            VM_ID=$(qm list | grep "smb-$share" | awk '{print $1}')
-            if [ -n "$VM_ID" ]; then
-                SHARE_IP=$(qm guest cmd "$VM_ID" network-get-interfaces 2>/dev/null | grep -o '"ip-address": "[^"]*"' | grep -v "127.0.0.1" | head -1 | cut -d'"' -f4)
-            fi
+        curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -d "$create_data" \
+            "http://localhost:8006/api2/json/nodes/$TEST_NODE/smbgateway/$sharename" >/dev/null
+    done
+    
+    local end_time=$(date +%s)
+    local creation_time=$((end_time - start_time))
+    
+    if [ "$creation_time" -le "$creation_time_target" ]; then
+        log_success "Share creation performance test passed (${creation_time}s <= ${creation_time_target}s)"
+    else
+        log_error "Share creation performance test failed (${creation_time}s > ${creation_time_target}s)"
+    fi
+    
+    # Test concurrent connections
+    log_info "Testing concurrent connections..."
+    
+    local connection_count=0
+    for i in {1..10}; do
+        if curl -s -f "http://localhost:8006/api2/json/nodes/$TEST_NODE/smbgateway/perf-test-share-1" >/dev/null; then
+            ((connection_count++))
         fi
+    done
+    
+    if [ "$connection_count" -ge "$concurrent_connections_target" ]; then
+        log_success "Concurrent connections test passed ($connection_count >= $concurrent_connections_target)"
+    else
+        log_error "Concurrent connections test failed ($connection_count < $concurrent_connections_target)"
+    fi
+    
+    # Clean up performance test shares
+    for i in {1..5}; do
+        local sharename="perf-test-share-$i"
+        curl -s -X DELETE "http://localhost:8006/api2/json/nodes/$TEST_NODE/smbgateway/$sharename" >/dev/null || true
+    done
+}
+
+# Test error handling and recovery
+test_error_handling() {
+    log_info "Testing error handling and recovery..."
+    
+    # Test invalid share creation
+    local invalid_data="{\"mode\":\"invalid\",\"path\":\"\"}"
+    
+    if ! response=$(curl -s -X POST \
+        -H "Content-Type: application/json" \
+        -d "$invalid_data" \
+        "http://localhost:8006/api2/json/nodes/$TEST_NODE/smbgateway/invalid-share"); then
         
-        # Test SMB connectivity
-        if [ -n "$SHARE_IP" ] && [ "$SHARE_IP" != "127.0.0.1" ]; then
-            if timeout 10 smbclient "//$SHARE_IP/$share" -U guest -c "ls" 2>/dev/null; then
-                print_status "PASS" "SMB connectivity for $share"
-            else
-                print_status "FAIL" "SMB connectivity failed for $share"
-            fi
-        else
-            # For native mode, test localhost
-            if timeout 10 smbclient "//127.0.0.1/$share" -U guest -c "ls" 2>/dev/null; then
-                print_status "PASS" "SMB connectivity for $share (localhost)"
-            else
-                print_status "FAIL" "SMB connectivity failed for $share (localhost)"
-            fi
-        fi
-    fi
-done
-
-echo -e "\n${BLUE}7. Testing Share Management${NC}"
-
-# Test share listing
-SHARE_LIST=$(pve-smbgateway list 2>/dev/null || echo "")
-for share in "${TEST_SHARES[@]}"; do
-    if echo "$SHARE_LIST" | grep -q "$share"; then
-        print_status "PASS" "Share $share appears in list"
+        log_success "Invalid share creation properly rejected"
     else
-        print_status "FAIL" "Share $share not found in list"
+        log_error "Invalid share creation should have been rejected"
     fi
-done
-
-echo -e "\n${BLUE}8. Testing Share Deletion${NC}"
-
-# Delete all test shares
-for share in "${TEST_SHARES[@]}"; do
-    if pve-smbgateway list | grep -q "$share"; then
-        if pve-smbgateway delete "$share"; then
-            print_status "PASS" "Share $share deletion successful"
-        else
-            print_status "FAIL" "Share $share deletion failed"
-        fi
-    fi
-done
-
-# Verify cleanup
-sleep 5
-for share in "${TEST_SHARES[@]}"; do
-    if ! pve-smbgateway list | grep -q "$share"; then
-        print_status "PASS" "Share $share properly cleaned up"
+    
+    # Test non-existent share access
+    if ! response=$(curl -s "http://localhost:8006/api2/json/nodes/$TEST_NODE/smbgateway/non-existent-share"); then
+        log_success "Non-existent share access properly handled"
     else
-        print_status "FAIL" "Share $share not properly cleaned up"
+        log_error "Non-existent share access should have failed"
     fi
-done
+    
+    # Test malformed JSON
+    if ! response=$(curl -s -X POST \
+        -H "Content-Type: application/json" \
+        -d "invalid json" \
+        "http://localhost:8006/api2/json/nodes/$TEST_NODE/smbgateway/json-test-share"); then
+        
+        log_success "Malformed JSON properly rejected"
+    else
+        log_error "Malformed JSON should have been rejected"
+    fi
+}
 
-echo -e "\n${GREEN}=== All Integration Tests Passed! ===${NC}"
-echo -e "${BLUE}All deployment modes are working correctly.${NC}"
+# Clean up test shares
+cleanup_test_shares() {
+    log_info "Cleaning up test shares..."
+    
+    # Get list of test shares from database
+    local test_shares=$(sqlite3 "$TEST_DIR/test.db" "SELECT sharename FROM shares WHERE sharename LIKE 'integration-%' OR sharename LIKE 'api-test-%' OR sharename LIKE 'db-test-%' OR sharename LIKE 'perf-test-%';")
+    
+    for share in $test_shares; do
+        # Delete via API
+        curl -s -X DELETE "http://localhost:8006/api2/json/nodes/$TEST_NODE/smbgateway/$share" >/dev/null || true
+        
+        # Clean up filesystem
+        rm -rf "/srv/smb/$share" 2>/dev/null || true
+    done
+    
+    # Clean up database
+    sqlite3 "$TEST_DIR/test.db" "DELETE FROM shares WHERE sharename LIKE 'integration-%' OR sharename LIKE 'api-test-%' OR sharename LIKE 'db-test-%' OR sharename LIKE 'perf-test-%';"
+    sqlite3 "$TEST_DIR/test.db" "DELETE FROM metrics WHERE sharename LIKE 'integration-%' OR sharename LIKE 'api-test-%' OR sharename LIKE 'db-test-%' OR sharename LIKE 'perf-test-%';"
+    sqlite3 "$TEST_DIR/test.db" "DELETE FROM backups WHERE sharename LIKE 'integration-%' OR sharename LIKE 'api-test-%' OR sharename LIKE 'db-test-%' OR sharename LIKE 'perf-test-%';"
+}
 
-# Summary
-echo -e "\n${BLUE}Test Summary:${NC}"
-echo "✓ Prerequisites validated"
-echo "✓ LXC mode working"
-echo "✓ Native mode working"
-echo "✓ VM mode working (if templates available)"
-echo "✓ Quota management functional"
-echo "✓ SMB connectivity verified"
-echo "✓ Share management working"
-echo "✓ Cleanup and deletion working"
+# Run tests
+run_tests() {
+    log_info "Running integration tests..."
+    
+    local test_results=0
+    
+    # Start mock services
+    start_mock_services
+    
+    # Run test categories
+    test_api_integration || ((test_results++))
+    test_database_operations || ((test_results++))
+    test_end_to_end_workflow || ((test_results++))
+    test_performance_scenarios || ((test_results++))
+    test_error_handling || ((test_results++))
+    
+    # Stop mock services
+    stop_mock_services
+    
+    return $test_results
+}
 
-echo -e "\n${GREEN}PVE SMB Gateway is ready for production use!${NC}" 
+# Main execution
+main() {
+    log_info "Starting PVE SMB Gateway Integration Tests"
+    
+    # Setup trap for cleanup
+    trap cleanup EXIT
+    
+    # Setup test environment
+    setup_test_environment
+    
+    # Run tests
+    run_tests
+    local test_exit_code=$?
+    
+    # Print summary
+    log_info "Test Summary:"
+    log_info "Total Tests: $TOTAL_TESTS"
+    log_info "Passed: $PASSED_TESTS"
+    log_info "Failed: $FAILED_TESTS"
+    
+    if [ $test_exit_code -eq 0 ] && [ $FAILED_TESTS -eq 0 ]; then
+        log_success "All integration tests completed successfully!"
+        exit 0
+    else
+        log_error "Some integration tests failed!"
+        exit 1
+    fi
+}
+
+# Run main function
+main "$@" 

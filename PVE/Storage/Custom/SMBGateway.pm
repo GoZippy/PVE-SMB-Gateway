@@ -14,6 +14,9 @@ use PVE::Storage::Plugin;
 use PVE::Tools qw(run_command file_read_all file_set_contents);
 use PVE::Exception qw(raise_param_exc);
 use PVE::SMBGateway::Monitor;
+use PVE::SMBGateway::Backup;
+use PVE::SMBGateway::Security;
+use PVE::SMBGateway::Security;
 use PVE::JSONSchema qw(get_standard_option);
 use Time::HiRes qw(time);
 use JSON::PP;
@@ -533,6 +536,9 @@ sub _lxc_create {
     
     # Install Samba inside the container
     _install_samba_in_lxc($ctid, $share, $ad_domain, $ctdb_vip);
+    
+    # Apply security hardening
+    _apply_security_hardening($ctid, $share, $path, 'lxc');
     
     # Apply quota if specified
     if ($quota) {
@@ -3500,6 +3506,525 @@ expect eof
         workgroup => $workgroup,
         domain => $domain
     };
+}
+
+# -------- metrics API endpoints --------
+
+sub get_metrics {
+    my ($class, $storeid, $scfg, %param) = @_;
+    
+    my $sharename = $scfg->{sharename} // die "missing sharename";
+    my $path = $scfg->{path} // "/srv/smb/$sharename";
+    
+    # Initialize monitor
+    my $monitor = PVE::SMBGateway::Monitor->new(
+        share_name => $sharename,
+        share_path => $path,
+        db_path => "/var/lib/pve/smbgateway/metrics.db"
+    );
+    
+    # Get current metrics
+    my $metrics = {
+        share_name => $sharename,
+        timestamp => time(),
+        io_stats => $monitor->collect_io_stats(),
+        connection_stats => $monitor->collect_connection_stats(),
+        quota_stats => $monitor->collect_quota_stats(),
+        system_stats => $monitor->collect_system_stats()
+    };
+    
+    return $metrics;
+}
+
+sub get_metrics_history {
+    my ($class, $storeid, $scfg, %param) = @_;
+    
+    my $sharename = $scfg->{sharename} // die "missing sharename";
+    my $path = $scfg->{path} // "/srv/smb/$sharename";
+    
+    # Parse parameters
+    my $hours = $param{hours} // 24;
+    my $limit = $param{limit} // 1000;
+    my $metric_type = $param{type} // 'all';
+    
+    # Initialize monitor
+    my $monitor = PVE::SMBGateway::Monitor->new(
+        share_name => $sharename,
+        share_path => $path,
+        db_path => "/var/lib/pve/smbgateway/metrics.db"
+    );
+    
+    # Get historical metrics
+    my $history = $monitor->get_metrics_history(
+        hours => $hours,
+        limit => $limit,
+        type => $metric_type
+    );
+    
+    return {
+        share_name => $sharename,
+        query_params => {
+            hours => $hours,
+            limit => $limit,
+            type => $metric_type
+        },
+        data => $history
+    };
+}
+
+sub get_metrics_summary {
+    my ($class, $storeid, $scfg, %param) = @_;
+    
+    my $sharename = $scfg->{sharename} // die "missing sharename";
+    my $path = $scfg->{path} // "/srv/smb/$sharename";
+    
+    # Parse parameters
+    my $hours = $param{hours} // 24;
+    
+    # Initialize monitor
+    my $monitor = PVE::SMBGateway::Monitor->new(
+        share_name => $sharename,
+        share_path => $path,
+        db_path => "/var/lib/pve/smbgateway/metrics.db"
+    );
+    
+    # Get metrics summary
+    my $summary = $monitor->get_metrics_summary(hours => $hours);
+    
+    return {
+        share_name => $sharename,
+        period_hours => $hours,
+        summary => $summary
+    };
+}
+
+sub get_prometheus_metrics {
+    my ($class, $storeid, $scfg, %param) = @_;
+    
+    my $sharename = $scfg->{sharename} // die "missing sharename";
+    my $path = $scfg->{path} // "/srv/smb/$sharename";
+    
+    # Initialize monitor
+    my $monitor = PVE::SMBGateway::Monitor->new(
+        share_name => $sharename,
+        share_path => $path,
+        db_path => "/var/lib/pve/smbgateway/metrics.db"
+    );
+    
+    # Get Prometheus-formatted metrics
+    my $prometheus_metrics = $monitor->export_prometheus_metrics();
+    
+    return {
+        content_type => 'text/plain; version=0.0.4; charset=utf-8',
+        data => $prometheus_metrics
+    };
+}
+
+sub get_performance_alerts {
+    my ($class, $storeid, $scfg, %param) = @_;
+    
+    my $sharename = $scfg->{sharename} // die "missing sharename";
+    my $path = $scfg->{path} // "/srv/smb/$sharename";
+    
+    # Parse parameters
+    my $hours = $param{hours} // 24;
+    my $severity = $param{severity} // 'all';
+    my $limit = $param{limit} // 100;
+    
+    # Initialize monitor
+    my $monitor = PVE::SMBGateway::Monitor->new(
+        share_name => $sharename,
+        share_path => $path,
+        db_path => "/var/lib/pve/smbgateway/metrics.db"
+    );
+    
+    # Get performance alerts
+    my $alerts = $monitor->get_performance_alerts(
+        hours => $hours,
+        severity => $severity,
+        limit => $limit
+    );
+    
+    return {
+        share_name => $sharename,
+        query_params => {
+            hours => $hours,
+            severity => $severity,
+            limit => $limit
+        },
+        alerts => $alerts
+    };
+}
+
+sub trigger_metrics_collection {
+    my ($class, $storeid, $scfg, %param) = @_;
+    
+    my $sharename = $scfg->{sharename} // die "missing sharename";
+    my $path = $scfg->{path} // "/srv/smb/$sharename";
+    
+    # Initialize monitor
+    my $monitor = PVE::SMBGateway::Monitor->new(
+        share_name => $sharename,
+        share_path => $path,
+        db_path => "/var/lib/pve/smbgateway/metrics.db"
+    );
+    
+    # Collect and store metrics
+    my $result = $monitor->collect_and_store_metrics();
+    
+    # Check for performance alerts
+    my $alerts = $monitor->check_performance_alerts();
+    
+    return {
+        share_name => $sharename,
+        collection_time => time(),
+        metrics_collected => $result,
+        alerts_generated => scalar(@$alerts),
+        alerts => $alerts
+    };
+}
+
+sub cleanup_old_metrics {
+    my ($class, $storeid, $scfg, %param) = @_;
+    
+    my $sharename = $scfg->{sharename} // die "missing sharename";
+    my $path = $scfg->{path} // "/srv/smb/$sharename";
+    
+    # Parse parameters
+    my $days = $param{days} // 30;
+    
+    # Initialize monitor
+    my $monitor = PVE::SMBGateway::Monitor->new(
+        share_name => $sharename,
+        share_path => $path,
+        db_path => "/var/lib/pve/smbgateway/metrics.db"
+    );
+    
+    # Cleanup old metrics and alerts
+    my $result = $monitor->cleanup_old_data(days => $days);
+    
+    return {
+        share_name => $sharename,
+        cleanup_days => $days,
+        cleanup_time => time(),
+        result => $result
+    };
+}
+
+# -------- backup API endpoints --------
+
+sub register_backup {
+    my ($class, $storeid, $scfg, %param) = @_;
+    
+    my $sharename = $scfg->{sharename} // die "missing sharename";
+    my $path = $scfg->{path} // "/srv/smb/$sharename";
+    my $mode = $scfg->{mode} // 'lxc';
+    
+    # Parse parameters
+    my $schedule = $param{schedule} // 'daily';
+    my $retention_days = $param{retention_days} // 30;
+    my $enabled = $param{enabled} // 1;
+    
+    # Initialize backup system
+    my $backup = PVE::SMBGateway::Backup->new(
+        share_name => $sharename,
+        share_id => $storeid,
+        mode => $mode,
+        path => $path
+    );
+    
+    # Register backup job
+    my $result = $backup->register_backup_job(
+        schedule => $schedule,
+        retention_days => $retention_days,
+        enabled => $enabled
+    );
+    
+    return $result;
+}
+
+sub unregister_backup {
+    my ($class, $storeid, $scfg, %param) = @_;
+    
+    my $sharename = $scfg->{sharename} // die "missing sharename";
+    my $path = $scfg->{path} // "/srv/smb/$sharename";
+    my $mode = $scfg->{mode} // 'lxc';
+    
+    # Initialize backup system
+    my $backup = PVE::SMBGateway::Backup->new(
+        share_name => $sharename,
+        share_id => $storeid,
+        mode => $mode,
+        path => $path
+    );
+    
+    # Unregister backup job
+    my $result = $backup->unregister_backup_job();
+    
+    return $result;
+}
+
+sub create_backup {
+    my ($class, $storeid, $scfg, %param) = @_;
+    
+    my $sharename = $scfg->{sharename} // die "missing sharename";
+    my $path = $scfg->{path} // "/srv/smb/$sharename";
+    my $mode = $scfg->{mode} // 'lxc';
+    
+    # Parse parameters
+    my $backup_type = $param{type} // 'manual';
+    my $snapshot_name = $param{snapshot_name} // undef;
+    
+    # Initialize backup system
+    my $backup = PVE::SMBGateway::Backup->new(
+        share_name => $sharename,
+        share_id => $storeid,
+        mode => $mode,
+        path => $path
+    );
+    
+    # Create backup snapshot
+    my $result = $backup->create_backup_snapshot(
+        type => $backup_type,
+        snapshot_name => $snapshot_name
+    );
+    
+    return $result;
+}
+
+sub restore_backup {
+    my ($class, $storeid, $scfg, %param) = @_;
+    
+    my $sharename = $scfg->{sharename} // die "missing sharename";
+    my $path = $scfg->{path} // "/srv/smb/$sharename";
+    my $mode = $scfg->{mode} // 'lxc';
+    
+    # Parse parameters
+    my $snapshot_name = $param{snapshot_name} // die "missing snapshot_name";
+    my $dry_run = $param{dry_run} // 0;
+    
+    # Initialize backup system
+    my $backup = PVE::SMBGateway::Backup->new(
+        share_name => $sharename,
+        share_id => $storeid,
+        mode => $mode,
+        path => $path
+    );
+    
+    # Restore backup snapshot
+    my $result = $backup->restore_backup_snapshot(
+        $snapshot_name,
+        dry_run => $dry_run
+    );
+    
+    return $result;
+}
+
+sub verify_backup {
+    my ($class, $storeid, $scfg, %param) = @_;
+    
+    my $sharename = $scfg->{sharename} // die "missing sharename";
+    my $path = $scfg->{path} // "/srv/smb/$sharename";
+    my $mode = $scfg->{mode} // 'lxc';
+    
+    # Parse parameters
+    my $snapshot_name = $param{snapshot_name} // die "missing snapshot_name";
+    
+    # Initialize backup system
+    my $backup = PVE::SMBGateway::Backup->new(
+        share_name => $sharename,
+        share_id => $storeid,
+        mode => $mode,
+        path => $path
+    );
+    
+    # Verify backup integrity
+    my $result = $backup->verify_backup_integrity($snapshot_name);
+    
+    return $result;
+}
+
+sub get_backup_status {
+    my ($class, $storeid, $scfg, %param) = @_;
+    
+    my $sharename = $scfg->{sharename} // die "missing sharename";
+    my $path = $scfg->{path} // "/srv/smb/$sharename";
+    my $mode = $scfg->{mode} // 'lxc';
+    
+    # Initialize backup system
+    my $backup = PVE::SMBGateway::Backup->new(
+        share_name => $sharename,
+        share_id => $storeid,
+        mode => $mode,
+        path => $path
+    );
+    
+    # Get backup status
+    my $result = $backup->get_backup_status();
+    
+    return $result;
+}
+
+sub test_backup_restoration {
+    my ($class, $storeid, $scfg, %param) = @_;
+    
+    my $sharename = $scfg->{sharename} // die "missing sharename";
+    my $path = $scfg->{path} // "/srv/smb/$sharename";
+    my $mode = $scfg->{mode} // 'lxc';
+    
+    # Parse parameters
+    my $snapshot_name = $param{snapshot_name} // die "missing snapshot_name";
+    
+    # Initialize backup system
+    my $backup = PVE::SMBGateway::Backup->new(
+        share_name => $sharename,
+        share_id => $storeid,
+        mode => $mode,
+        path => $path
+    );
+    
+    # Test backup restoration
+    my $result = $backup->test_backup_restoration($snapshot_name);
+    
+    return $result;
+}
+
+sub cleanup_backups {
+    my ($class, $storeid, $scfg, %param) = @_;
+    
+    my $sharename = $scfg->{sharename} // die "missing sharename";
+    my $path = $scfg->{path} // "/srv/smb/$sharename";
+    my $mode = $scfg->{mode} // 'lxc';
+    
+    # Parse parameters
+    my $days = $param{days} // 30;
+    
+    # Initialize backup system
+    my $backup = PVE::SMBGateway::Backup->new(
+        share_name => $sharename,
+        share_id => $storeid,
+        mode => $mode,
+        path => $path
+    );
+    
+    # Cleanup old backups
+    my $result = $backup->cleanup_old_backups(days => $days);
+    
+    return $result;
+}
+
+sub list_all_backups {
+    my ($class) = @_;
+    
+    # Get all backup jobs
+    my $jobs = PVE::SMBGateway::Backup::list_backup_jobs();
+    
+    return {
+        jobs => $jobs,
+        total_jobs => scalar(@$jobs)
+    };
+}
+
+# -------- security hardening methods --------
+sub _apply_security_hardening {
+    my ($container_or_vm_id, $share, $path, $mode) = @_;
+    
+    # Initialize security module
+    my $security = PVE::SMBGateway::Security->new(
+        share_name => $share,
+        share_id => $share,
+        mode => $mode,
+        path => $path
+    );
+    
+    # Create security profile
+    my $profile = $security->create_security_profile(
+        profile_type => 'standard',
+        mode => $mode
+    );
+    
+    # Apply SMB protocol hardening
+    my $smb_result = $security->harden_smb_protocol(
+        smb_conf_path => $mode eq 'lxc' ? "/proc/$container_or_vm_id/root/etc/samba/smb.conf" : "/etc/samba/smb.conf"
+    );
+    
+    # Setup service user for native mode
+    if ($mode eq 'native') {
+        my $user_result = $security->setup_service_user(
+            username => "smbgateway_$share"
+        );
+    }
+    
+    # Run initial security scan
+    my $scan_result = $security->run_security_scan(
+        scan_type => 'comprehensive'
+    );
+    
+    # Log security hardening completion
+    _log_operation('security_hardening', {
+        share => $share,
+        mode => $mode,
+        profile => $profile->{name},
+        smb_result => $smb_result->{status},
+        scan_findings => $scan_result->{findings_count}
+    });
+    
+    return {
+        status => 'success',
+        profile => $profile,
+        smb_hardening => $smb_result,
+        security_scan => $scan_result
+    };
+}
+
+sub get_security_status {
+    my ($class, $storeid, $scfg, %param) = @_;
+    
+    my $sharename = $scfg->{sharename} // die "missing sharename";
+    my $path = $scfg->{path} // "/srv/smb/$sharename";
+    my $mode = $scfg->{mode} // 'lxc';
+    
+    # Initialize security module
+    my $security = PVE::SMBGateway::Security->new(
+        share_name => $sharename,
+        share_id => $storeid,
+        mode => $mode,
+        path => $path
+    );
+    
+    # Generate security report
+    my $report = $security->generate_security_report(
+        report_type => 'comprehensive',
+        timeframe => 30
+    );
+    
+    return $report;
+}
+
+sub run_security_scan {
+    my ($class, $storeid, $scfg, %param) = @_;
+    
+    my $sharename = $scfg->{sharename} // die "missing sharename";
+    my $path = $scfg->{path} // "/srv/smb/$sharename";
+    my $mode = $scfg->{mode} // 'lxc';
+    
+    # Parse parameters
+    my $scan_type = $param{scan_type} // 'comprehensive';
+    
+    # Initialize security module
+    my $security = PVE::SMBGateway::Security->new(
+        share_name => $sharename,
+        share_id => $storeid,
+        mode => $mode,
+        path => $path
+    );
+    
+    # Run security scan
+    my $result = $security->run_security_scan(
+        scan_type => $scan_type
+    );
+    
+    return $result;
 }
 
 1;

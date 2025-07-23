@@ -42,8 +42,8 @@ sub api_call {
 sub list_shares {
     my ($self) = @_;
     
-    my $response = $self->api_call('GET', '/nodes/' . `hostname` . '/storage');
     chomp(my $hostname = `hostname`);
+    my $response = $self->api_call('GET', "/nodes/$hostname/storage");
     
     my $shares = [];
     foreach my $storage (@{$response->{data}}) {
@@ -194,8 +194,51 @@ sub test_ha_connectivity {
         return 0;
     }
 }
+
+sub get_security_status {
+    my ($self, $share_id) = @_;
+    chomp(my $hostname = `hostname`);
     
-    return $response;
+    eval {
+        my $response = $self->api_call('GET', "/nodes/$hostname/storage/$share_id/security-status");
+        return $response->{data};
+    };
+    
+    return { status => 'error', message => 'Failed to get security status' };
+}
+
+sub run_security_scan {
+    my ($self, $share_id, $scan_type) = @_;
+    chomp(my $hostname = `hostname`);
+    
+    my $data = {
+        scan_type => $scan_type || 'comprehensive'
+    };
+    
+    eval {
+        my $response = $self->api_call('POST', "/nodes/$hostname/storage/$share_id/security-scan", $data);
+        return $response->{data};
+    };
+    
+    return { status => 'error', message => 'Failed to run security scan' };
+}
+
+sub generate_security_report {
+    my ($self, $share_id, $report_type, $timeframe) = @_;
+    chomp(my $hostname = `hostname`);
+    
+    my $data = {
+        report_type => $report_type || 'comprehensive',
+        timeframe => $timeframe || 30
+    };
+    
+    eval {
+        my $response = $self->api_call('POST', "/nodes/$hostname/storage/$share_id/security-report", $data);
+        return $response->{data};
+    };
+    
+    return { status => 'error', message => 'Failed to generate security report' };
+}
 }
 
 sub create_share {
@@ -530,6 +573,196 @@ if ($command eq 'list') {
         }
     }
     
+} elsif ($command eq 'metrics') {
+    # Performance metrics operations
+    my $metrics_type = shift @ARGV;
+    my $share_id = shift @ARGV;
+    
+    unless ($share_id) {
+        die "Usage: pve-smbgateway metrics <type> <share_id> [options]\n";
+    }
+    
+    chomp(my $hostname = `hostname`);
+    
+    if ($metrics_type eq 'current') {
+        # Get current metrics
+        my $response = $client->api_call('GET', "/nodes/$hostname/storage/$share_id/metrics");
+        print "=== Current Metrics for $share_id ===\n";
+        use JSON::PP;
+        print encode_json($response->{data}) . "\n";
+        
+    } elsif ($metrics_type eq 'history') {
+        # Get historical metrics
+        my $hours = shift @ARGV // 24;
+        my $limit = shift @ARGV // 1000;
+        my $type = shift @ARGV // 'all';
+        
+        my $response = $client->api_call('GET', "/nodes/$hostname/storage/$share_id/metrics/history?hours=$hours&limit=$limit&type=$type");
+        print "=== Historical Metrics for $share_id (last $hours hours) ===\n";
+        use JSON::PP;
+        print encode_json($response->{data}) . "\n";
+        
+    } elsif ($metrics_type eq 'summary') {
+        # Get metrics summary
+        my $hours = shift @ARGV // 24;
+        
+        my $response = $client->api_call('GET', "/nodes/$hostname/storage/$share_id/metrics/summary?hours=$hours");
+        print "=== Metrics Summary for $share_id (last $hours hours) ===\n";
+        use JSON::PP;
+        print encode_json($response->{data}) . "\n";
+        
+    } elsif ($metrics_type eq 'prometheus') {
+        # Get Prometheus metrics
+        my $response = $client->api_call('GET', "/nodes/$hostname/storage/$share_id/metrics/prometheus");
+        print "=== Prometheus Metrics for $share_id ===\n";
+        print $response->{data}->{data} . "\n";
+        
+    } elsif ($metrics_type eq 'alerts') {
+        # Get performance alerts
+        my $hours = shift @ARGV // 24;
+        my $severity = shift @ARGV // 'all';
+        my $limit = shift @ARGV // 100;
+        
+        my $response = $client->api_call('GET', "/nodes/$hostname/storage/$share_id/metrics/alerts?hours=$hours&severity=$severity&limit=$limit");
+        print "=== Performance Alerts for $share_id (last $hours hours) ===\n";
+        use JSON::PP;
+        print encode_json($response->{data}) . "\n";
+        
+    } elsif ($metrics_type eq 'collect') {
+        # Trigger metrics collection
+        my $response = $client->api_call('POST', "/nodes/$hostname/storage/$share_id/metrics/collect");
+        print "=== Metrics Collection Triggered for $share_id ===\n";
+        use JSON::PP;
+        print encode_json($response->{data}) . "\n";
+        
+    } elsif ($metrics_type eq 'cleanup') {
+        # Cleanup old metrics
+        my $days = shift @ARGV // 30;
+        
+        my $response = $client->api_call('POST', "/nodes/$hostname/storage/$share_id/metrics/cleanup?days=$days");
+        print "=== Metrics Cleanup for $share_id (older than $days days) ===\n";
+        use JSON::PP;
+        print encode_json($response->{data}) . "\n";
+        
+    } else {
+        die "Unknown metrics type '$metrics_type'. Use 'current', 'history', 'summary', 'prometheus', 'alerts', 'collect', or 'cleanup'.\n";
+    }
+    
+} elsif ($command eq 'backup') {
+    # Backup operations
+    my $backup_type = shift @ARGV;
+    my $share_id = shift @ARGV;
+    
+    unless ($share_id) {
+        die "Usage: pve-smbgateway backup <type> <share_id> [options]\n";
+    }
+    
+    chomp(my $hostname = `hostname`);
+    
+    if ($backup_type eq 'register') {
+        # Register backup job
+        my $schedule = shift @ARGV // 'daily';
+        my $retention_days = shift @ARGV // 30;
+        
+        my $response = $client->api_call('POST', "/nodes/$hostname/storage/$share_id/backup/register", {
+            schedule => $schedule,
+            retention_days => $retention_days,
+            enabled => 1
+        });
+        print "=== Backup Job Registered for $share_id ===\n";
+        use JSON::PP;
+        print encode_json($response->{data}) . "\n";
+        
+    } elsif ($backup_type eq 'unregister') {
+        # Unregister backup job
+        my $response = $client->api_call('POST', "/nodes/$hostname/storage/$share_id/backup/unregister");
+        print "=== Backup Job Unregistered for $share_id ===\n";
+        use JSON::PP;
+        print encode_json($response->{data}) . "\n";
+        
+    } elsif ($backup_type eq 'create') {
+        # Create backup snapshot
+        my $backup_type = shift @ARGV // 'manual';
+        my $snapshot_name = shift @ARGV // undef;
+        
+        my $data = { type => $backup_type };
+        $data->{snapshot_name} = $snapshot_name if $snapshot_name;
+        
+        my $response = $client->api_call('POST', "/nodes/$hostname/storage/$share_id/backup/create", $data);
+        print "=== Backup Created for $share_id ===\n";
+        use JSON::PP;
+        print encode_json($response->{data}) . "\n";
+        
+    } elsif ($backup_type eq 'restore') {
+        # Restore backup snapshot
+        my $snapshot_name = shift @ARGV;
+        my $dry_run = shift @ARGV // 0;
+        
+        die "Missing snapshot name" unless $snapshot_name;
+        
+        my $response = $client->api_call('POST', "/nodes/$hostname/storage/$share_id/backup/restore", {
+            snapshot_name => $snapshot_name,
+            dry_run => $dry_run
+        });
+        print "=== Backup Restore for $share_id ===\n";
+        use JSON::PP;
+        print encode_json($response->{data}) . "\n";
+        
+    } elsif ($backup_type eq 'verify') {
+        # Verify backup integrity
+        my $snapshot_name = shift @ARGV;
+        
+        die "Missing snapshot name" unless $snapshot_name;
+        
+        my $response = $client->api_call('POST', "/nodes/$hostname/storage/$share_id/backup/verify", {
+            snapshot_name => $snapshot_name
+        });
+        print "=== Backup Verification for $share_id ===\n";
+        use JSON::PP;
+        print encode_json($response->{data}) . "\n";
+        
+    } elsif ($backup_type eq 'status') {
+        # Get backup status
+        my $response = $client->api_call('GET', "/nodes/$hostname/storage/$share_id/backup/status");
+        print "=== Backup Status for $share_id ===\n";
+        use JSON::PP;
+        print encode_json($response->{data}) . "\n";
+        
+    } elsif ($backup_type eq 'test') {
+        # Test backup restoration
+        my $snapshot_name = shift @ARGV;
+        
+        die "Missing snapshot name" unless $snapshot_name;
+        
+        my $response = $client->api_call('POST', "/nodes/$hostname/storage/$share_id/backup/test", {
+            snapshot_name => $snapshot_name
+        });
+        print "=== Backup Test for $share_id ===\n";
+        use JSON::PP;
+        print encode_json($response->{data}) . "\n";
+        
+    } elsif ($backup_type eq 'cleanup') {
+        # Cleanup old backups
+        my $days = shift @ARGV // 30;
+        
+        my $response = $client->api_call('POST', "/nodes/$hostname/storage/$share_id/backup/cleanup", {
+            days => $days
+        });
+        print "=== Backup Cleanup for $share_id (older than $days days) ===\n";
+        use JSON::PP;
+        print encode_json($response->{data}) . "\n";
+        
+    } elsif ($backup_type eq 'list') {
+        # List all backup jobs
+        my $response = $client->api_call('GET', "/nodes/$hostname/storage/backup/list");
+        print "=== All Backup Jobs ===\n";
+        use JSON::PP;
+        print encode_json($response->{data}) . "\n";
+        
+    } else {
+        die "Unknown backup type '$backup_type'. Use 'register', 'unregister', 'create', 'restore', 'verify', 'status', 'test', 'cleanup', or 'list'.\n";
+    }
+    
 } elsif ($command eq 'cleanup') {
     # Manual cleanup operations
     my $cleanup_type = shift @ARGV;
@@ -655,8 +888,107 @@ if ($command eq 'list') {
         die "Unknown cleanup type '$cleanup_type'. Use 'status' or 'report'.\n";
     }
     
+} elsif ($command eq 'security') {
+    # Security operations
+    my $security_type = shift @ARGV;
+    my $share_id = shift @ARGV;
+    
+    unless ($share_id) {
+        die "Usage: pve-smbgateway security <type> <share_id> [options]\n";
+    }
+    
+    if ($security_type eq 'status') {
+        # Get security status
+        my $status = $cli->get_security_status($share_id);
+        
+        if (ref($status) eq 'HASH') {
+            print "=== Security Status for $share_id ===\n";
+            print "Overall Status: $status->{status}\n";
+            
+            if ($status->{security_summary}) {
+                print "\nSecurity Summary:\n";
+                my $summary = $status->{security_summary};
+                print "  Recent Events: " . scalar(@{$status->{recent_events}}) . "\n";
+                print "  Recent Scans: " . scalar(@{$status->{scan_results}}) . "\n";
+                print "  Recommendations: " . scalar(@{$status->{recommendations}}) . "\n";
+            }
+            
+            if ($status->{recommendations}) {
+                print "\nRecommendations:\n";
+                foreach my $rec (@{$status->{recommendations}}) {
+                    print "  [$rec->{priority}] $rec->{title}\n";
+                    print "    $rec->{description}\n";
+                    print "    Action: $rec->{action}\n\n";
+                }
+            }
+        } else {
+            print "Failed to get security status: $status\n";
+        }
+        
+    } elsif ($security_type eq 'scan') {
+        # Run security scan
+        my $scan_type = shift @ARGV // 'comprehensive';
+        
+        print "Running security scan for share '$share_id'...\n";
+        
+        my $result = $cli->run_security_scan($share_id, $scan_type);
+        
+        if (ref($result) eq 'HASH' && $result->{status} eq 'completed') {
+            print "✓ Security scan completed successfully\n";
+            print "  Findings: $result->{findings_count}\n";
+            print "  Critical: $result->{critical_count}\n";
+            print "  High: $result->{high_count}\n";
+            print "  Medium: $result->{medium_count}\n";
+            print "  Low: $result->{low_count}\n";
+            print "  Duration: $result->{duration} seconds\n";
+            print "  Report: $result->{report_path}\n";
+        } else {
+            print "✗ Security scan failed: " . ($result->{message} || 'Unknown error') . "\n";
+            exit 1;
+        }
+        
+    } elsif ($security_type eq 'report') {
+        # Generate security report
+        my $report_type = shift @ARGV // 'comprehensive';
+        my $timeframe = shift @ARGV // 30;
+        
+        print "Generating security report for share '$share_id'...\n";
+        
+        my $report = $cli->generate_security_report($share_id, $report_type, $timeframe);
+        
+        if (ref($report) eq 'HASH') {
+            print "=== Security Report for $share_id ===\n";
+            print "Report Type: $report->{report_info}->{report_type}\n";
+            print "Timeframe: $report->{report_info}->{timeframe} days\n";
+            print "Generated: " . POSIX::strftime('%Y-%m-%d %H:%M:%S', localtime($report->{report_info}->{generated_at})) . "\n";
+            
+            if ($report->{security_summary}) {
+                print "\nSecurity Summary:\n";
+                my $summary = $report->{security_summary};
+                print "  Recent Events: " . scalar(@{$report->{recent_events}}) . "\n";
+                print "  Recent Scans: " . scalar(@{$report->{scan_results}}) . "\n";
+                print "  Recommendations: " . scalar(@{$report->{recommendations}}) . "\n";
+            }
+            
+            if ($report->{recommendations}) {
+                print "\nRecommendations:\n";
+                foreach my $rec (@{$report->{recommendations}}) {
+                    print "  [$rec->{priority}] $rec->{title}\n";
+                    print "    $rec->{description}\n";
+                    print "    Action: $rec->{action}\n\n";
+                }
+            }
+        } else {
+            print "✗ Failed to generate security report: " . ($report->{message} || 'Unknown error') . "\n";
+            exit 1;
+        }
+        
+    } else {
+        die "Unknown security type '$security_type'. Use 'status', 'scan', or 'report'.\n";
+    }
+    
 } else {
-    die "Unknown command '$command'. Use 'list', 'create', 'delete', 'status', 'vip-status', 'failover', 'logs', or 'cleanup'.\n";
+    die "Unknown command '$command'. Use 'list', 'create', 'delete', 'status', 'vip-status', 'failover', 'logs', 'metrics', 'backup', 'cleanup', or 'security'.\n";
 }
 
 __END__
@@ -674,6 +1006,9 @@ pve-smbgateway - Proxmox VE SMB Gateway management CLI
   pve-smbgateway vip-status <share_id>
   pve-smbgateway failover <share_id> <target_node>
   pve-smbgateway logs [--operation-id <id>]
+  pve-smbgateway metrics <type> <share_id> [options]
+  pve-smbgateway backup <type> <share_id> [options]
+  pve-smbgateway security <type> <share_id> [options]
   pve-smbgateway cleanup status
   pve-smbgateway cleanup report
 
@@ -752,6 +1087,25 @@ Operation ID for targeted log viewing
   # Show operation logs
   pve-smbgateway logs
   pve-smbgateway logs --operation-id create_storage_1234567890_1234
+
+  # Performance metrics
+  pve-smbgateway metrics current myshare
+  pve-smbgateway metrics history myshare 24 1000 all
+  pve-smbgateway metrics summary myshare 24
+  pve-smbgateway metrics prometheus myshare
+  pve-smbgateway metrics alerts myshare 24 all 100
+  pve-smbgateway metrics collect myshare
+  pve-smbgateway metrics cleanup myshare 30
+
+  # Backup operations
+  pve-smbgateway backup register myshare daily 30
+  pve-smbgateway backup create myshare manual
+  pve-smbgateway backup status myshare
+  pve-smbgateway backup verify myshare backup_1234567890
+  pve-smbgateway backup test myshare backup_1234567890
+  pve-smbgateway backup restore myshare backup_1234567890
+  pve-smbgateway backup cleanup myshare 30
+  pve-smbgateway backup list
 
   # Check cleanup status
   pve-smbgateway cleanup status
