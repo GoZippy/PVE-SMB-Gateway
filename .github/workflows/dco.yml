@@ -1,0 +1,22 @@
+name: DCO Check
+
+on:
+  pull_request:
+    branches: [ main, master, develop ]
+
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check DCO
+        uses: actions/checkout@v4
+      
+      - name: Check DCO
+        run: |
+          # Check if all commits have DCO sign-off
+          if ! git log --oneline --no-merges ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} | grep -q "Signed-off-by:"; then
+            echo "❌ DCO check failed: All commits must be signed off"
+            echo "Please add 'Signed-off-by: Your Name <your.email@example.com>' to your commit messages"
+            exit 1
+          fi
+          echo "✅ DCO check passed" 

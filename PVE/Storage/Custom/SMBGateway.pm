@@ -13,6 +13,7 @@ use base qw(PVE::Storage::Plugin);
 use PVE::Storage::Plugin;
 use PVE::Tools qw(run_command);
 use PVE::Exception qw(raise_param_exc);
+use PVE::SMBGateway::Monitor;
 
 # -------- mandatory identifiers --------
 sub type        { 'smbgateway' }
@@ -183,6 +184,36 @@ sub status {
                 error => 'Failed to get quota usage information',
                 filesystem_type => _get_fs_type($path),
                 last_checked => time()
+            };
+        }
+    }
+    
+    # Add performance metrics if monitoring is enabled
+    if ($param{include_metrics}) {
+        eval {
+            my $monitor = PVE::SMBGateway::Monitor->new();
+            my $metrics = $monitor->collect_performance_metrics($sharename, $path, $quota);
+            
+            # Store metrics for historical tracking
+            $monitor->store_metrics($metrics);
+            
+            # Add current metrics to status
+            $status->{metrics} = {
+                io_stats => $metrics->{io_stats},
+                connection_stats => $metrics->{connection_stats},
+                system_stats => $metrics->{system_stats},
+                last_updated => time()
+            };
+        };
+        
+        # Add historical metrics if requested
+        if ($param{include_history}) {
+            eval {
+                my $monitor = PVE::SMBGateway::Monitor->new();
+                my $start_time = time() - (24 * 60 * 60); # Last 24 hours
+                my $historical_metrics = $monitor->get_metrics($sharename, $start_time);
+                
+                $status->{metrics}->{history} = $historical_metrics;
             };
         }
     }
@@ -942,7 +973,7 @@ sub _get_zfs_quota_usage {
     my ($path) = @_;
     
     # Get ZFS dataset name
-    my $dataset = `zfs list | grep $path | awk '{print \$1}'`;
+    my $dataset = `zfs list | grep "$path" | awk '{print \$1}'`;
     chomp $dataset;
     
     if ($dataset) {
@@ -1251,9 +1282,15 @@ sub _vm_create {
                  '--cores', $vm_cores,
                  '--net0', 'virtio,bridge=vmbr0']);
     
+    # Add cloud-init configuration
+    run_command(['qm', 'set', $vmid, 
+                 '--ide2', 'local:iso/smb-gateway-cloud-init.iso,media=cdrom'],
+                errmsg => "failed to add cloud-init configuration");
+    
     # Add virtio-fs mount for the share path
     run_command(['qm', 'set', $vmid, 
-                 '--virtio9p0', "path=$path,mount_tag=share"]);
+                 '--virtio9p0', "path=$path,mount_tag=share"],
+                errmsg => "failed to add virtio-fs mount");
     
     # Start the VM
     run_command(['qm', 'start', $vmid]);
@@ -1347,79 +1384,128 @@ sub _find_vm_template {
         }
     }
     
-    die "No suitable VM template found. Please download a Debian or Ubuntu cloud image.";
+    # If no template found, try to create one
+    warn "No suitable VM template found. Attempting to create one...";
+    return $self->_create_vm_template();
 }
 
 sub _validate_vm_template {
     my ($self, $template) = @_;
     
-    # Check if it's a known SMB gateway template
-    if ($template =~ /smb-gateway/) {
-        return $template;
+    # Check if template exists
+    my $hostname = `hostname`;
+    chomp $hostname;
+    
+    my $template_list = `pvesh get /nodes/$hostname/storage/local/content --type iso 2>/dev/null`;
+    
+    if ($template_list =~ /\Q$template\E/) {
+        return 1;
     }
     
-    # Check if it's a supported base template
-    if ($template =~ /(debian|ubuntu).*\.(qcow2|img)$/) {
-        return $template;
-    }
-    
-    die "Template $template does not appear to be a valid Debian or Ubuntu template";
+    return 0;
 }
 
 sub _create_vm_template {
     my ($self, $force_create) = @_;
     
-    # Check if required tools are available
-    my @required_tools = ('qemu-img', 'debootstrap', 'chroot');
-    foreach my $tool (@required_tools) {
-        if (system("which $tool >/dev/null 2>&1") != 0) {
-            die "Missing required tools for VM template creation. Please install: " . join(', ', @required_tools);
+    # Check if template already exists
+    unless ($force_create) {
+        my $existing_template = $self->_find_vm_template();
+        if ($existing_template && $existing_template ne '') {
+            return $existing_template;
         }
     }
+    
+    # Check if required tools are available
+    my @required_tools = ('qemu-img', 'wget', 'genisoimage');
+    my @missing_tools = ();
+    
+    foreach my $tool (@required_tools) {
+        if (system("which $tool >/dev/null 2>&1") != 0) {
+            push @missing_tools, $tool;
+        }
+    }
+    
+    if (@missing_tools) {
+        die "Missing required tools for VM template creation. Please install: " . join(', ', @missing_tools);
+    }
+    
+    # Create template directory
+    my $template_dir = "/var/lib/vz/template/iso";
+    mkdir $template_dir unless -d $template_dir;
     
     # Create temporary directory for template building
     my $temp_dir = "/tmp/smb-gateway-template-$$";
     mkdir $temp_dir or die "Cannot create temp directory: $!";
     
     eval {
-        # Create base image
-        my $image_path = "$temp_dir/smb-gateway-debian12.qcow2";
-        run_command(['qemu-img', 'create', '-f', 'qcow2', $image_path, '2G']);
+        # Download Debian cloud image
+        my $debian_url = "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2";
+        my $image_path = "$temp_dir/debian-12-generic-amd64.qcow2";
         
-        # Create filesystem
-        my $loop_device = `losetup -f`;
-        chomp $loop_device;
-        run_command(['losetup', $loop_device, $image_path]);
-        run_command(['mkfs.ext4', $loop_device]);
+        print "Downloading Debian 12 cloud image...\n";
+        run_command(['wget', '-O', $image_path, $debian_url], 
+                   errmsg => "Failed to download Debian cloud image");
         
-        # Mount and bootstrap
-        my $mount_point = "$temp_dir/mnt";
-        mkdir $mount_point;
-        run_command(['mount', $loop_device, $mount_point]);
+        # Create cloud-init configuration
+        my $user_data = "$temp_dir/user-data";
+        open(my $fh, '>', $user_data) or die "Cannot create user-data: $!";
+        print $fh <<'EOF';
+#cloud-config
+package_update: true
+package_upgrade: true
+
+packages:
+  - samba
+  - winbind
+  - acl
+  - attr
+  - cloud-init
+
+runcmd:
+  - systemctl enable smbd
+  - systemctl enable nmbd
+  - systemctl enable winbind
+  - mkdir -p /etc/samba/smb.conf.d
+  - echo "workgroup = WORKGROUP" > /etc/samba/smb.conf.d/global.conf
+  - echo "server string = SMB Gateway" >> /etc/samba/smb.conf.d/global.conf
+  - echo "security = user" >> /etc/samba/smb.conf.d/global.conf
+  - echo "map to guest = bad user" >> /etc/samba/smb.conf.d/global.conf
+  - echo "dns proxy = no" >> /etc/samba/smb.conf.d/global.conf
+  - echo "log level = 1" >> /etc/samba/smb.conf.d/global.conf
+
+ssh_pwauth: false
+disable_root: false
+EOF
+        close $fh;
         
-        # Bootstrap Debian
-        run_command(['debootstrap', '--arch=amd64', 'bookworm', $mount_point, 'http://deb.debian.org/debian']);
+        my $meta_data = "$temp_dir/meta-data";
+        open($fh, '>', $meta_data) or die "Cannot create meta-data: $!";
+        print $fh <<'EOF';
+instance-id: smb-gateway-template
+local-hostname: smb-gateway
+EOF
+        close $fh;
         
-        # Install Samba in chroot
-        run_command(['chroot', $mount_point, 'apt-get', 'update']);
-        run_command(['chroot', $mount_point, 'apt-get', 'install', '-y', 'samba', 'samba-common-bin', 'winbind', 'cloud-init']);
-        run_command(['chroot', $mount_point, 'systemctl', 'enable', 'smbd', 'nmbd']);
+        # Create cloud-init ISO
+        print "Creating cloud-init configuration...\n";
+        run_command(['genisoimage', '-output', "$temp_dir/smb-gateway-cloud-init.iso",
+                    '-volid', 'cidata', '-joliet', '-rock', $user_data, $meta_data],
+                   errmsg => "Failed to create cloud-init ISO");
         
-        # Clean up chroot
-        run_command(['chroot', $mount_point, 'apt-get', 'clean']);
-        run_command(['chroot', $mount_point, 'rm', '-rf', '/var/lib/apt/lists/*']);
+        # Copy files to final location
+        my $final_image = "$template_dir/smb-gateway-debian12.qcow2";
+        my $final_iso = "$template_dir/smb-gateway-cloud-init.iso";
         
-        # Unmount and detach
-        run_command(['umount', $mount_point]);
-        run_command(['losetup', '-d', $loop_device]);
-        
-        # Copy to final location
-        my $final_path = "/var/lib/vz/template/iso/smb-gateway-debian12.qcow2";
-        run_command(['cp', $image_path, $final_path]);
+        run_command(['cp', $image_path, $final_image], 
+                   errmsg => "Failed to copy VM image");
+        run_command(['cp', "$temp_dir/smb-gateway-cloud-init.iso", $final_iso],
+                   errmsg => "Failed to copy cloud-init ISO");
         
         # Clean up temp directory
         run_command(['rm', '-rf', $temp_dir]);
         
+        print "VM template created successfully!\n";
         return 'local:iso/smb-gateway-debian12.qcow2';
     };
     
