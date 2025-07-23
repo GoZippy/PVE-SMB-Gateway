@@ -31,9 +31,9 @@ git push origin v0.1.0
 - Go to Settings → Actions → General
 - Enable "Allow all actions and reusable workflows"
 
-#### Enable DCO (Developer Certificate of Origin)
+#### Enable DCO (Developer Certificate of Origin) - Optional
 - Go to Settings → General → Developer Certificate of Origin
-- Check "Require a signed commit"
+- Check "Require a signed commit" (optional - can be added later)
 
 #### Set up Branch Protection
 - Go to Settings → Branches
