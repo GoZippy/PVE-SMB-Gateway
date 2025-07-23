@@ -1,0 +1,21 @@
+{
+  "enabled": true,
+  "name": "Update Documentation on Code Changes",
+  "description": "Monitors changes to source files and suggests documentation updates in README.md or docs/ folder to keep documentation in sync with code",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "PVE/**/*.pm",
+      "www/**/*.js",
+      "sbin/*",
+      "scripts/*.sh",
+      "t/*.t",
+      "templates/*.yml"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "I noticed changes to source code files in the PVE SMB Gateway project. Please analyze these changes and suggest appropriate updates to either:\n1. README.md - for user-facing changes, installation instructions, or feature updates\n2. docs/*.md files - for architectural changes, development processes, or detailed technical documentation\n\nFor the changes, consider:\n- What functionality was modified?\n- Does this affect the user experience or installation process?\n- Are there new features that should be documented?\n- Do architectural diagrams or explanations need updates?\n- Should the development guide be updated with new patterns or requirements?\n\nPlease provide specific suggestions for documentation updates that align with the code changes."
+  }
+}

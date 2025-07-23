@@ -73,8 +73,36 @@ sub get_share_status {
     return 'error';
 }
 
+sub get_vip_status {
+    my ($self, $share_id) = @_;
+    chomp(my $hostname = `hostname`);
+    
+    eval {
+        my $response = $self->api_call('GET', "/nodes/$hostname/storage/$share_id/status");
+        if ($response->{data}->{ctdb_status}) {
+            return $response->{data}->{ctdb_status};
+        }
+        return { status => 'unknown', message => 'CTDB status not available' };
+    };
+    
+    return { status => 'error', message => 'Failed to get CTDB status' };
+}
+
+sub trigger_failover {
+    my ($self, $share_id, $target_node) = @_;
+    chomp(my $hostname = `hostname`);
+    
+    my $data = {
+        target_node => $target_node
+    };
+    
+    my $response = $self->api_call('POST', "/nodes/$hostname/storage/$share_id/failover", $data);
+    
+    return $response;
+}
+
 sub create_share {
-    my ($self, $sharename, $mode, $path, $quota, $ad_domain, $ctdb_vip) = @_;
+    my ($self, $sharename, $mode, $path, $quota, $ad_domain, $ctdb_vip, $ad_join, $ad_username, $ad_password, $ad_ou) = @_;
     
     chomp(my $hostname = `hostname`);
     
@@ -89,6 +117,14 @@ sub create_share {
     $data->{quota} = $quota if $quota;
     $data->{ad_domain} = $ad_domain if $ad_domain;
     $data->{ctdb_vip} = $ctdb_vip if $ctdb_vip;
+    
+    # Add AD join parameters if specified
+    if ($ad_domain && $ad_join) {
+        $data->{ad_join} = 1;
+        $data->{ad_username} = $ad_username if $ad_username;
+        $data->{ad_password} = $ad_password if $ad_password;
+        $data->{ad_ou} = $ad_ou if $ad_ou;
+    }
     
     my $response = $self->api_call('POST', "/nodes/$hostname/storage", $data);
     
@@ -110,13 +146,17 @@ package main;
 
 my $cli = PVE::SMBGatewayCLI->new();
 
-my ($help, $mode, $path, $quota, $ad_domain, $ctdb_vip);
+my ($help, $mode, $path, $quota, $ad_domain, $ad_join, $ad_username, $ad_password, $ad_ou, $ctdb_vip);
 my $result = GetOptions(
     "help|h" => \$help,
     "mode=s" => \$mode,
     "path=s" => \$path,
     "quota=s" => \$quota,
     "ad-domain=s" => \$ad_domain,
+    "ad-join" => \$ad_join,
+    "ad-username=s" => \$ad_username,
+    "ad-password=s" => \$ad_password,
+    "ad-ou=s" => \$ad_ou,
     "ctdb-vip=s" => \$ctdb_vip,
 );
 
@@ -153,7 +193,7 @@ if ($command eq 'list') {
     
     print "Creating SMB Gateway share '$share_id'...\n";
     
-    my $response = $cli->create_share($share_id, $mode, $path, $quota, $ad_domain, $ctdb_vip);
+    my $response = $cli->create_share($share_id, $mode, $path, $quota, $ad_domain, $ctdb_vip, $ad_join, $ad_username, $ad_password, $ad_ou);
     
     if ($response->{success}) {
         print "Share '$share_id' created successfully.\n";
@@ -182,8 +222,51 @@ if ($command eq 'list') {
     my $status = $cli->get_share_status($share_id);
     print "Share '$share_id' status: $status\n";
     
+} elsif ($command eq 'vip-status') {
+    die "Usage: $0 vip-status <share_id>\n" unless $share_id;
+    
+    my $status = $cli->get_vip_status($share_id);
+    
+    if (ref($status) eq 'HASH') {
+        print "VIP status for share '$share_id':\n";
+        print "  Status: $status->{status}\n";
+        print "  Message: $status->{message}\n";
+        
+        if ($status->{active_node}) {
+            print "  Active node: $status->{active_node}\n";
+        }
+        
+        if (ref($status->{nodes}) eq 'HASH') {
+            print "  Nodes:\n";
+            foreach my $node (keys %{$status->{nodes}}) {
+                my $node_status = $status->{nodes}->{$node};
+                print "    $node:\n";
+                print "      Has VIP: " . ($node_status->{has_vip} ? "Yes" : "No") . "\n";
+                print "      CTDB status: $node_status->{ctdb_status}\n";
+                print "      SMB status: $node_status->{smb_status}\n";
+            }
+        }
+    } else {
+        print "VIP status for share '$share_id': $status\n";
+    }
+    
+} elsif ($command eq 'failover') {
+    die "Usage: $0 failover <share_id> <target_node>\n" unless $share_id && $ARGV[0];
+    
+    my $target_node = $ARGV[0];
+    print "Triggering failover for share '$share_id' to node '$target_node'...\n";
+    
+    my $response = $cli->trigger_failover($share_id, $target_node);
+    
+    if ($response->{success}) {
+        print "Failover successful: " . ($response->{message} || 'VIP moved to target node') . "\n";
+    } else {
+        print "Failover failed: " . ($response->{message} || 'Unknown error') . "\n";
+        exit 1;
+    }
+    
 } else {
-    die "Unknown command '$command'. Use 'list', 'create', 'delete', or 'status'.\n";
+    die "Unknown command '$command'. Use 'list', 'create', 'delete', 'status', 'vip-status', or 'failover'.\n";
 }
 
 __END__
@@ -198,6 +281,8 @@ pve-smbgateway - Proxmox VE SMB Gateway management CLI
   pve-smbgateway create <sharename> [options]
   pve-smbgateway delete <share_id>
   pve-smbgateway status <share_id>
+  pve-smbgateway vip-status <share_id>
+  pve-smbgateway failover <share_id> <target_node>
 
 =head1 OPTIONS
 
@@ -219,6 +304,22 @@ Quota for the share (e.g., 10G, 1T)
 
 Active Directory domain for authentication
 
+=item B<--ad-join>
+
+Join the Active Directory domain (requires --ad-domain)
+
+=item B<--ad-username> <username>
+
+Username for Active Directory domain join (default: Administrator)
+
+=item B<--ad-password> <password>
+
+Password for Active Directory domain join
+
+=item B<--ad-ou> <ou>
+
+Organizational Unit for computer account in Active Directory
+
 =item B<--ctdb-vip> <ip>
 
 CTDB virtual IP for HA failover
@@ -236,8 +337,20 @@ CTDB virtual IP for HA failover
   # Create a share with AD integration
   pve-smbgateway create officeshare --mode native --ad-domain example.com
 
+  # Create a share and join AD domain
+  pve-smbgateway create adshare --mode lxc --ad-domain example.com --ad-join --ad-password "secret"
+
+  # Create a share with HA support
+  pve-smbgateway create hashare --mode lxc --ctdb-vip 192.168.1.100
+
   # Check share status
   pve-smbgateway status myshare
+
+  # Check VIP status for HA share
+  pve-smbgateway vip-status hashare
+
+  # Trigger failover to another node
+  pve-smbgateway failover hashare pve2
 
   # Delete a share
   pve-smbgateway delete myshare

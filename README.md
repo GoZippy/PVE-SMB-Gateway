@@ -11,10 +11,10 @@ A Proxmox Virtual Environment (PVE) plugin that provides a GUI-managed, lightwei
 - **Multiple deployment modes**:
   - **LXC Mode** (default): Lightweight containers with Samba
   - **Native Mode**: Direct host installation
-  - **VM Mode** (planned): Dedicated VM templates
+  - **VM Mode** (beta): Dedicated VM templates with cloud-init
 - **High Availability**: CTDB support for floating IPs
 - **Active Directory integration** for enterprise environments
-- **Quota management** for storage limits
+- **Advanced quota management** with real-time monitoring, usage tracking, and trend analysis
 - **Resource efficient** (≤80MB RAM in LXC mode)
 - **CLI tools** for automation
 
@@ -51,7 +51,7 @@ pve-smbgateway list
 # Create a new share
 pve-smbgateway create myshare --mode lxc --quota 10G
 
-# Check share status
+# Check share status (includes quota usage and trends)
 pve-smbgateway status myshare
 
 # Delete a share
@@ -126,6 +126,20 @@ storage: officeshare
 	ad_domain example.com
 ```
 
+### VM Mode with Custom Resources
+
+```bash
+storage: vmshare
+	type smbgateway
+	sharename vmshare
+	mode vm
+	path /srv/smb/vm
+	quota 100G
+	vm_memory 4096
+	vm_cores 4
+	vm_template local:vztmpl/smb-gateway-debian12.qcow2
+```
+
 ### HA Setup with CTDB
 
 ```bash
@@ -136,6 +150,7 @@ storage: hashare
 	path /srv/smb/ha
 	quota 50G
 	ctdb_vip 192.168.1.100
+	ha_enabled 1
 ```
 
 ## Testing
@@ -163,16 +178,22 @@ perl t/10-create-share.t
 
 ### Common Issues
 
-1. **Template not found**: Download a Debian/Ubuntu template
-2. **Permission denied**: Check LXC container permissions
+1. **Template not found**: Download a Debian/Ubuntu template for LXC mode, or VM template for VM mode
+2. **Permission denied**: Check LXC container permissions or VM access rights
 3. **SMB not accessible**: Verify firewall and network configuration
-4. **AD join fails**: Check domain credentials and DNS
+4. **AD join fails**: Check domain credentials and DNS resolution
+5. **VM mode fails**: Ensure sufficient host resources and valid VM template
+6. **CTDB cluster issues**: Verify network connectivity between nodes and VIP configuration
+7. **Quota not working**: Ensure filesystem supports quotas (ZFS, XFS with project quotas, or ext4 with user quotas)
+8. **Quota monitoring unavailable**: Check that quota tools are installed (`zfs`, `xfs_quota`, or `quota` command)
 
 ### Logs
 
 - **Plugin logs**: `/var/log/pveproxy/access.log`
 - **LXC logs**: `pct logs <ctid>`
-- **Samba logs**: Inside LXC container or `/var/log/samba/`
+- **VM logs**: `qm monitor <vmid>` or VM console
+- **Samba logs**: Inside container/VM or `/var/log/samba/`
+- **CTDB logs**: `/var/log/ctdb/` (in HA setups)
 
 ## Contributing
 
@@ -200,10 +221,13 @@ By contributing to this project, you agree that your contributions will be dual-
 - [x] Basic LXC and native mode support
 - [x] ExtJS wizard integration
 - [x] CLI tools
-- [ ] VM mode implementation
-- [ ] Advanced HA features
-- [ ] Performance monitoring
+- [x] VM mode implementation (beta)
+- [x] Basic HA with CTDB support
+- [x] Active Directory integration
+- [x] Quota management
+- [ ] Advanced monitoring and metrics
 - [ ] Backup integration
+- [ ] Security hardening
 
 ### Phase 2: Storage Service Launcher (v1.1.0+)
 - [ ] **App Store Interface**: GUI for deploying TrueNAS, MinIO, Nextcloud, and more
