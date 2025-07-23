@@ -488,8 +488,175 @@ if ($command eq 'list') {
         exit 1;
     }
     
+} elsif ($command eq 'logs') {
+    # Show operation logs
+    my $log_dir = '/var/log/pve';
+    my $operation_log = "$log_dir/smbgateway-operations.log";
+    my $error_log = "$log_dir/smbgateway-errors.log";
+    my $audit_log = "$log_dir/smbgateway-audit.log";
+    
+    if ($operation_id) {
+        # Show logs for specific operation
+        print "=== Logs for Operation: $operation_id ===\n";
+        foreach my $log_file ($operation_log, $error_log, $audit_log) {
+            if (-f $log_file) {
+                my $grep_result = `grep "$operation_id" "$log_file" 2>/dev/null`;
+                if ($grep_result) {
+                    print "--- $log_file ---\n";
+                    print $grep_result;
+                    print "\n";
+                }
+            }
+        }
+    } else {
+        # Show recent logs
+        print "=== Recent Operation Logs ===\n";
+        if (-f $operation_log) {
+            print "--- Operations Log (last 10 lines) ---\n";
+            system("tail -10 '$operation_log'");
+            print "\n";
+        }
+        
+        if (-f $error_log) {
+            print "--- Error Log (last 10 lines) ---\n";
+            system("tail -10 '$error_log'");
+            print "\n";
+        }
+        
+        if (-f $audit_log) {
+            print "--- Audit Log (last 10 lines) ---\n";
+            system("tail -10 '$audit_log'");
+            print "\n";
+        }
+    }
+    
+} elsif ($command eq 'cleanup') {
+    # Manual cleanup operations
+    my $cleanup_type = shift @ARGV;
+    
+    if ($cleanup_type eq 'status') {
+        # Show cleanup status
+        print "=== SMB Gateway Cleanup Status ===\n";
+        
+        # Check for containers
+        my $containers = `pct list 2>/dev/null | grep smbgateway || true`;
+        if ($containers) {
+            print "SMB Gateway Containers:\n";
+            print $containers;
+            print "\n";
+        } else {
+            print "No SMB Gateway containers found\n";
+        }
+        
+        # Check for VMs
+        my $vms = `qm list 2>/dev/null | grep smbgateway || true`;
+        if ($vms) {
+            print "SMB Gateway VMs:\n";
+            print $vms;
+            print "\n";
+        } else {
+            print "No SMB Gateway VMs found\n";
+        }
+        
+        # Check for Samba shares
+        if (-f '/etc/samba/smb.conf') {
+            my $shares = `grep '^\[' /etc/samba/smb.conf | grep -v '^\[global\]' | grep -v '^\[homes\]' | grep -v '^\[printers\]' || true`;
+            if ($shares) {
+                print "Samba Shares:\n";
+                print $shares;
+                print "\n";
+            } else {
+                print "No Samba shares found\n";
+            }
+        }
+        
+        # Check for CTDB
+        if (-d '/etc/ctdb') {
+            print "CTDB configuration found: /etc/ctdb\n";
+        } else {
+            print "No CTDB configuration found\n";
+        }
+        
+        # Check for AD domain
+        my $realm_status = `realm list 2>/dev/null || echo "none"`;
+        if ($realm_status ne "none") {
+            print "AD Domain Status:\n";
+            print $realm_status;
+            print "\n";
+        } else {
+            print "No AD domain joined\n";
+        }
+        
+    } elsif ($cleanup_type eq 'report') {
+        # Generate cleanup report
+        my $report_file = "/tmp/smbgateway-cleanup-report-" . time() . ".json";
+        
+        my $report = {
+            timestamp => POSIX::strftime('%Y-%m-%d %H:%M:%S', localtime),
+            system_status => {},
+            recommendations => []
+        };
+        
+        # Get system status
+        my $containers = `pct list 2>/dev/null | grep smbgateway || true`;
+        $report->{system_status}->{containers} = $containers ? scalar(split(/\n/, $containers)) : 0;
+        
+        my $vms = `qm list 2>/dev/null | grep smbgateway || true`;
+        $report->{system_status}->{vms} = $vms ? scalar(split(/\n/, $vms)) : 0;
+        
+        if (-f '/etc/samba/smb.conf') {
+            $report->{system_status}->{samba_shares} = `grep -c '^\[' /etc/samba/smb.conf`;
+        } else {
+            $report->{system_status}->{samba_shares} = 0;
+        }
+        
+        $report->{system_status}->{ctdb_configured} = -d '/etc/ctdb' ? 1 : 0;
+        $report->{system_status}->{ad_joined} = `realm list 2>/dev/null` ? 1 : 0;
+        
+        # Generate recommendations
+        if ($containers) {
+            foreach my $line (split(/\n/, $containers)) {
+                my ($vmid, $status, $name) = split(/\s+/, $line);
+                push @{$report->{recommendations}}, {
+                    type => 'container',
+                    id => $vmid,
+                    name => $name,
+                    status => $status,
+                    action => "pct destroy $vmid"
+                };
+            }
+        }
+        
+        if ($vms) {
+            foreach my $line (split(/\n/, $vms)) {
+                my ($vmid, $status, $name) = split(/\s+/, $line);
+                push @{$report->{recommendations}}, {
+                    type => 'vm',
+                    id => $vmid,
+                    name => $name,
+                    status => $status,
+                    action => "qm destroy $vmid"
+                };
+            }
+        }
+        
+        # Write report
+        use JSON::PP;
+        open(my $fh, '>', $report_file) or die "Cannot write report: $!";
+        print $fh encode_json($report);
+        close($fh);
+        
+        print "Cleanup report generated: $report_file\n";
+        print "Report contents:\n";
+        print encode_json($report);
+        print "\n";
+        
+    } else {
+        die "Unknown cleanup type '$cleanup_type'. Use 'status' or 'report'.\n";
+    }
+    
 } else {
-    die "Unknown command '$command'. Use 'list', 'create', 'delete', 'status', 'vip-status', or 'failover'.\n";
+    die "Unknown command '$command'. Use 'list', 'create', 'delete', 'status', 'vip-status', 'failover', 'logs', or 'cleanup'.\n";
 }
 
 __END__
@@ -506,6 +673,9 @@ pve-smbgateway - Proxmox VE SMB Gateway management CLI
   pve-smbgateway status <share_id>
   pve-smbgateway vip-status <share_id>
   pve-smbgateway failover <share_id> <target_node>
+  pve-smbgateway logs [--operation-id <id>]
+  pve-smbgateway cleanup status
+  pve-smbgateway cleanup report
 
 =head1 OPTIONS
 
@@ -547,6 +717,10 @@ Organizational Unit for computer account in Active Directory
 
 CTDB virtual IP for HA failover
 
+=item B<--operation-id> <id>
+
+Operation ID for targeted log viewing
+
 =back
 
 =head1 EXAMPLES
@@ -574,6 +748,14 @@ CTDB virtual IP for HA failover
 
   # Trigger failover to another node
   pve-smbgateway failover hashare pve2
+
+  # Show operation logs
+  pve-smbgateway logs
+  pve-smbgateway logs --operation-id create_storage_1234567890_1234
+
+  # Check cleanup status
+  pve-smbgateway cleanup status
+  pve-smbgateway cleanup report
 
   # Delete a share
   pve-smbgateway delete myshare

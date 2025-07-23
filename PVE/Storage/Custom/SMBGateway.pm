@@ -11,9 +11,12 @@ use strict;
 use warnings;
 use base qw(PVE::Storage::Plugin);
 use PVE::Storage::Plugin;
-use PVE::Tools qw(run_command);
+use PVE::Tools qw(run_command file_read_all file_set_contents);
 use PVE::Exception qw(raise_param_exc);
 use PVE::SMBGateway::Monitor;
+use PVE::JSONSchema qw(get_standard_option);
+use Time::HiRes qw(time);
+use JSON::PP;
 
 # -------- mandatory identifiers --------
 sub type        { 'smbgateway' }
@@ -285,10 +288,28 @@ sub create_storage {
         }
     }
 
+    # Start operation tracking
+    my $operation_id = _start_operation('create_storage', {
+        mode => $mode,
+        sharename => $sharename,
+        path => $path,
+        quota => $quota,
+        ad_domain => $ad_domain,
+        ctdb_vip => $ctdb_vip,
+        ha_enabled => $ha_enabled,
+        ha_nodes => $ha_nodes
+    });
+    
     # Track what we've created for rollback
     my @rollback_steps = ();
     
     eval {
+        _add_operation_step('validation', 'Validating storage parameters', {
+            mode => $mode,
+            sharename => $sharename,
+            path => $path
+        });
+        
         if ($mode eq 'native') {
             _native_create($path, $sharename, $quota, $ad_domain, $ctdb_vip, \@rollback_steps);
         } elsif ($mode eq 'lxc') {
@@ -298,13 +319,37 @@ sub create_storage {
         } else {
             die "Unknown mode: $mode";
         }
+        
+        _add_operation_step('completion', 'Storage creation completed successfully', {
+            mode => $mode,
+            sharename => $sharename
+        });
     };
     
     if ($@) {
+        my $error_message = "Failed to create share: $@";
+        
+        _log_operation('ERROR', $error_message, {
+            operation_id => $operation_id,
+            mode => $mode,
+            sharename => $sharename
+        });
+        
         # Rollback on failure
-        _rollback_creation(\@rollback_steps);
-        die "Failed to create share: $@";
+        _add_operation_step('rollback', 'Starting rollback procedure', {
+            steps_count => scalar @rollback_steps
+        });
+        
+        my $rollback_result = _rollback_creation_enhanced(\@rollback_steps);
+        
+        # Create cleanup report
+        _create_cleanup_report($operation_id);
+        
+        _end_operation(0, $error_message);
+        die $error_message;
     }
+    
+    _end_operation(1, undef);
 }
 
 # -------- native mode implementations --------
@@ -313,7 +358,7 @@ sub _native_create {
     
     # Create directory
     mkdir $path unless -d $path;
-    push @$rollback_steps, ['rmdir', $path];
+    _add_rollback_step('rmdir', "Remove directory: $path", $path);
     
     run_command(['chown', 'root:root', $path]);
     
@@ -329,7 +374,7 @@ sub _native_create {
     # Backup original config
     if (-f $smb_conf) {
         run_command(['cp', $smb_conf, $backup_conf]);
-        push @$rollback_steps, ['restore_smb_conf', $backup_conf];
+        _add_rollback_step('restore_smb_conf', "Restore Samba configuration from backup", $backup_conf);
     }
     
     open my $fh, '>>', $smb_conf or die "Cannot append to $smb_conf: $!";
@@ -462,11 +507,11 @@ sub _lxc_create {
     chomp $ctid;
     die "Failed to get next CT ID" unless $ctid =~ /^\d+$/;
     
-    push @$rollback_steps, ['destroy_ct', $ctid];
+    _add_rollback_step('destroy_ct', "Destroy LXC container: $ctid", $ctid);
     
     # Create directory
     mkdir $path unless -d $path;
-    push @$rollback_steps, ['rmdir', $path];
+    _add_rollback_step('rmdir', "Remove directory: $path", $path);
     
     # Find available template
     my $template = _find_template();
@@ -691,7 +736,7 @@ sub _apply_quota {
         _store_quota_info($path, $quota, $bytes);
         
         # Add quota to rollback steps
-        push @$rollback_steps, ['remove_quota', $path, $fs_type];
+        _add_rollback_step('remove_quota', "Remove quota from: $path", $path, $fs_type);
         
         # Log success
         warn "Successfully applied quota of $quota to $path";
@@ -733,7 +778,7 @@ sub _apply_zfs_quota {
         run_command(['zfs', 'set', "quota=$quota", $dataset]);
         
         # Add rollback step
-        push @$rollback_steps, ['zfs_remove_quota', $dataset];
+        _add_rollback_step('zfs_remove_quota', "Remove ZFS quota from dataset: $dataset", $dataset);
     } else {
         die "No ZFS dataset found for path: $path";
     }
@@ -787,7 +832,7 @@ sub _apply_xfs_quota {
             run_command(['xfs_quota', '-x', '-c', "limit -p bhard=$blocks $next_id", $mount_point]);
             
             # Add rollback step
-            push @$rollback_steps, ['xfs_remove_quota', $next_id, $mount_point];
+            _add_rollback_step('xfs_remove_quota', "Remove XFS quota for project: $next_id", $next_id, $mount_point);
         } else {
             die "Project quotas not enabled on $mount_point";
         }
@@ -812,7 +857,7 @@ sub _apply_user_quota {
         run_command(['setquota', '-u', 'root', '0', $bytes, '0', '0', $mount_point]);
         
         # Add rollback step
-        push @$rollback_steps, ['user_remove_quota', 'root', $mount_point];
+        _add_rollback_step('user_remove_quota', "Remove user quota for root", 'root', $mount_point);
     } else {
         warn "Quota tools not available, quota not applied";
     }
@@ -1597,10 +1642,9 @@ sub _join_ad_domain_native {
         };
     } else {
         if ($fallback) {
-            warn "Domain join failed: $join_result, using fallback authentication";
-            return _setup_fallback_auth_native();
+            warn "Domain join failed, continuing with fallback authentication";
         } else {
-            die "Domain join failed: $join_result";
+            die "Failed to join domain: $domain";
         }
     }
 }
@@ -1653,7 +1697,7 @@ sub _setup_fallback_auth {
     run_command(['echo', "$fallback_user:$fallback_password", '|', 'chpasswd']);
     
     # Add to rollback steps
-    push @$rollback_steps, ['remove_user', $fallback_user];
+    _add_rollback_step('remove_user', "Remove fallback user: $fallback_user", $fallback_user);
     
     # Configure Samba for local authentication
     my $fallback_config = "
@@ -1699,11 +1743,11 @@ sub _vm_create {
     chomp $vmid;
     die "Failed to get next VM ID" unless $vmid =~ /^\d+$/;
     
-    push @$rollback_steps, ['destroy_vm', $vmid];
+    _add_rollback_step('destroy_vm', "Destroy VM: $vmid", $vmid);
     
     # Create directory
     mkdir $path unless -d $path;
-    push @$rollback_steps, ['rmdir', $path];
+    _add_rollback_step('rmdir', "Remove directory: $path", $path);
     
     # Find or create VM template
     my $template = _find_vm_template();
@@ -2294,7 +2338,7 @@ CTDB_DEBUGLEVEL=1
     }
     
     # Add to rollback steps
-    push @$rollback_steps, ['stop_ctdb_lxc', $container_id];
+    _add_rollback_step('stop_ctdb_lxc', "Stop CTDB service in LXC container: $container_id", $container_id);
     
     return {
         success => 1,
@@ -2389,7 +2433,7 @@ CTDB_DEBUGLEVEL=1
     }
     
     # Add to rollback steps
-    push @$rollback_steps, ['stop_ctdb_vm', $vm_id, $vm_ip];
+    _add_rollback_step('stop_ctdb_vm', "Stop CTDB service in VM: $vm_id", $vm_id, $vm_ip);
     
     return {
         success => 1,
@@ -2483,7 +2527,7 @@ CTDB_DEBUGLEVEL=1
     }
     
     # Add to rollback steps
-    push @$rollback_steps, ['stop_ctdb_native'];
+    _add_rollback_step('stop_ctdb_native', "Stop CTDB service on native host");
     
     return {
         success => 1,
@@ -2627,66 +2671,437 @@ sub _test_ctdb_connectivity {
 sub _rollback_creation {
     my ($rollback_steps) = @_;
     
-    # Execute rollback steps in reverse order
-    foreach my $step (reverse @$rollback_steps) {
-        my ($action, @args) = @$step;
-        
-        eval {
-            if ($action eq 'rmdir') {
-                rmdir $args[0] if -d $args[0];
-            } elsif ($action eq 'destroy_ct') {
-                run_command(['pct', 'destroy', $args[0]], undef, undef, 1);
-            } elsif ($action eq 'destroy_vm') {
-                run_command(['qm', 'destroy', $args[0]], undef, undef, 1);
-            } elsif ($action eq 'restore_smb_conf') {
-                run_command(['cp', $args[0], '/etc/samba/smb.conf']) if -f $args[0];
-                unlink $args[0];
-            } elsif ($action eq 'remove_quota') {
-                _remove_quota($args[0], $args[1]);
-            } elsif ($action eq 'zfs_remove_quota') {
-                run_command(['zfs', 'inherit', 'quota', $args[0]], undef, undef, 1);
-            } elsif ($action eq 'xfs_remove_quota') {
-                # Remove XFS project quota
-                my ($project_id, $mount_point) = @args;
-                run_command(['xfs_quota', '-x', '-c', "limit -p bhard=0 $project_id", $mount_point], undef, undef, 1);
-            } elsif ($action eq 'user_remove_quota') {
-                # Remove user quota
-                my ($user, $mount_point) = @args;
-                run_command(['setquota', '-u', $user, '0', '0', '0', '0', $mount_point], undef, undef, 1);
-            } elsif ($action eq 'ad_packages_installed') {
-                # Note: We don't automatically remove AD packages as they might be used elsewhere
-                warn "AD packages were installed during setup";
-            } elsif ($action eq 'leave_ad_domain') {
-                # Leave AD domain
-                my ($domain) = @args;
-                run_command(['realm', 'leave', $domain], undef, undef, 1);
-            } elsif ($action eq 'ctdb_package_installed') {
-                # Note: We don't automatically remove CTDB package as it might be used elsewhere
-                warn "CTDB package was installed during setup";
-            } elsif ($action eq 'remove_ctdb_config_dir') {
-                # Remove CTDB configuration directory
-                run_command(['rm', '-rf', '/etc/ctdb'], undef, undef, 1);
-            } elsif ($action eq 'remove_ctdb_nodes_file') {
-                # Remove CTDB nodes file
-                unlink '/etc/ctdb/nodes';
-            } elsif ($action eq 'remove_ctdb_pa_file') {
-                # Remove CTDB public addresses file
-                unlink '/etc/ctdb/public_addresses';
-            } elsif ($action eq 'stop_ctdb_service') {
-                # Stop and disable CTDB service
-                run_command(['systemctl', 'stop', 'ctdb'], undef, undef, 1);
-                run_command(['systemctl', 'disable', 'ctdb'], undef, undef, 1);
-            }
-        };
-        
-        if ($@) {
-            warn "Rollback step failed: $action - $@";
+    # Start operation tracking if not already started
+    unless ($current_operation) {
+        _start_operation('rollback', { steps_count => scalar @$rollback_steps });
+    }
+    
+    my $result = _rollback_creation_enhanced($rollback_steps);
+    
+    _end_operation(1, undef);
+    
+    return $result;
+}
+
+# -------- enhanced rollback system --------
+use PVE::Tools qw(run_command file_read_all file_set_contents);
+use PVE::JSONSchema qw(get_standard_option);
+use Time::HiRes qw(time);
+use JSON::PP;
+
+# Operation tracking and logging
+my $OPERATION_LOG_FILE = '/var/log/pve/smbgateway-operations.log';
+my $ERROR_LOG_FILE = '/var/log/pve/smbgateway-errors.log';
+my $AUDIT_LOG_FILE = '/var/log/pve/smbgateway-audit.log';
+
+# Operation context tracking
+my $current_operation = undef;
+my $operation_start_time = undef;
+
+sub _init_operation_logging {
+    # Ensure log directories exist
+    my $log_dir = '/var/log/pve';
+    mkdir $log_dir, 0755 unless -d $log_dir;
+    
+    # Create log files if they don't exist
+    foreach my $log_file ($OPERATION_LOG_FILE, $ERROR_LOG_FILE, $AUDIT_LOG_FILE) {
+        unless (-f $log_file) {
+            open(my $fh, '>', $log_file) or warn "Cannot create log file $log_file: $!";
+            close($fh) if $fh;
+            chmod 0644, $log_file;
         }
     }
 }
 
-sub _remove_quota {
+sub _log_operation {
+    my ($level, $message, $context) = @_;
+    
+    _init_operation_logging();
+    
+    my $timestamp = POSIX::strftime('%Y-%m-%d %H:%M:%S', localtime);
+    my $operation_id = $current_operation ? $current_operation->{id} : 'unknown';
+    my $context_str = $context ? encode_json($context) : '{}';
+    
+    my $log_entry = sprintf("[%s] [%s] [%s] %s %s\n", 
+        $timestamp, $level, $operation_id, $message, $context_str);
+    
+    my $log_file;
+    if ($level eq 'ERROR') {
+        $log_file = $ERROR_LOG_FILE;
+    } elsif ($level eq 'AUDIT') {
+        $log_file = $AUDIT_LOG_FILE;
+    } else {
+        $log_file = $OPERATION_LOG_FILE;
+    }
+    
+    open(my $fh, '>>', $log_file) or warn "Cannot write to log file $log_file: $!";
+    print $fh $log_entry if $fh;
+    close($fh) if $fh;
+}
+
+sub _start_operation {
+    my ($operation_type, $params) = @_;
+    
+    $current_operation = {
+        id => sprintf("%s_%d_%d", $operation_type, time(), int(rand(10000))),
+        type => $operation_type,
+        start_time => time(),
+        params => $params,
+        steps => [],
+        rollback_steps => []
+    };
+    
+    $operation_start_time = time();
+    
+    _log_operation('INFO', "Operation started", {
+        operation_id => $current_operation->{id},
+        type => $operation_type,
+        params => $params
+    });
+    
+    return $current_operation->{id};
+}
+
+sub _end_operation {
+    my ($success, $error_message) = @_;
+    
+    return unless $current_operation;
+    
+    my $duration = time() - $operation_start_time;
+    my $status = $success ? 'SUCCESS' : 'FAILED';
+    
+    _log_operation('INFO', "Operation completed", {
+        operation_id => $current_operation->{id},
+        status => $status,
+        duration => sprintf("%.2f", $duration),
+        error_message => $error_message
+    });
+    
+    if ($success) {
+        _log_operation('AUDIT', "Operation successful", {
+            operation_id => $current_operation->{id},
+            type => $current_operation->{type},
+            duration => sprintf("%.2f", $duration)
+        });
+    } else {
+        _log_operation('ERROR', "Operation failed", {
+            operation_id => $current_operation->{id},
+            type => $current_operation->{type},
+            error_message => $error_message,
+            duration => sprintf("%.2f", $duration)
+        });
+    }
+    
+    $current_operation = undef;
+    $operation_start_time = undef;
+}
+
+sub _add_operation_step {
+    my ($step_type, $description, $params) = @_;
+    
+    return unless $current_operation;
+    
+    my $step = {
+        type => $step_type,
+        description => $description,
+        timestamp => time(),
+        params => $params
+    };
+    
+    push @{$current_operation->{steps}}, $step;
+    
+    _log_operation('INFO', "Operation step: $description", {
+        operation_id => $current_operation->{id},
+        step_type => $step_type,
+        params => $params
+    });
+}
+
+sub _add_rollback_step {
+    my ($action, $description, @args) = @_;
+    
+    return unless $current_operation;
+    
+    my $step = {
+        action => $action,
+        description => $description,
+        args => \@args,
+        timestamp => time()
+    };
+    
+    push @{$current_operation->{rollback_steps}}, $step;
+    
+    _log_operation('INFO', "Rollback step added: $description", {
+        operation_id => $current_operation->{id},
+        action => $action,
+        args => \@args
+    });
+}
+
+sub _validate_rollback_step {
+    my ($step) = @_;
+    
+    my ($action, $description, @args) = @$step;
+    
+    # Validate action type
+    my $valid_actions = {
+        'rmdir' => 1,
+        'destroy_ct' => 1,
+        'destroy_vm' => 1,
+        'restore_smb_conf' => 1,
+        'remove_quota' => 1,
+        'zfs_remove_quota' => 1,
+        'xfs_remove_quota' => 1,
+        'user_remove_quota' => 1,
+        'ad_packages_installed' => 1,
+        'leave_ad_domain' => 1,
+        'ctdb_package_installed' => 1,
+        'remove_ctdb_config_dir' => 1,
+        'remove_ctdb_nodes_file' => 1,
+        'remove_ctdb_pa_file' => 1,
+        'stop_ctdb_service' => 1,
+        'stop_ctdb_lxc' => 1,
+        'stop_ctdb_vm' => 1,
+        'stop_ctdb_native' => 1,
+        'remove_user' => 1,
+        'restore_network_config' => 1,
+        'restore_firewall_rules' => 1,
+        'restore_systemd_services' => 1
+    };
+    
+    unless ($valid_actions->{$action}) {
+        _log_operation('ERROR', "Invalid rollback action: $action", {
+            action => $action,
+            description => $description
+        });
+        return 0;
+    }
+    
+    # Validate arguments based on action
+    if ($action eq 'rmdir' && @args < 1) {
+        _log_operation('ERROR', "rmdir action requires path argument", { args => \@args });
+        return 0;
+    }
+    
+    if (($action eq 'destroy_ct' || $action eq 'destroy_vm') && @args < 1) {
+        _log_operation('ERROR', "$action action requires ID argument", { args => \@args });
+        return 0;
+    }
+    
+    return 1;
+}
+
+sub _execute_rollback_step {
+    my ($step) = @_;
+    
+    my ($action, $description, @args) = @$step;
+    
+    _log_operation('INFO', "Executing rollback step: $description", {
+        action => $action,
+        args => \@args
+    });
+    
+    eval {
+        if ($action eq 'rmdir') {
+            my $path = $args[0];
+            if (-d $path) {
+                # Check if directory is empty
+                my @contents = glob("$path/*");
+                if (@contents == 0) {
+                    rmdir $path;
+                    _log_operation('INFO', "Removed directory: $path");
+                } else {
+                    _log_operation('WARN', "Directory not empty, skipping removal: $path", {
+                        contents_count => scalar @contents
+                    });
+                }
+            } else {
+                _log_operation('INFO', "Directory does not exist, skipping: $path");
+            }
+        } elsif ($action eq 'destroy_ct') {
+            my $ctid = $args[0];
+            # Check if container exists and is stopped
+            my $status = `pct status $ctid 2>/dev/null`;
+            if ($status =~ /stopped/i) {
+                run_command(['pct', 'destroy', $ctid], undef, undef, 1);
+                _log_operation('INFO', "Destroyed container: $ctid");
+            } else {
+                _log_operation('WARN', "Container not stopped, skipping destruction: $ctid", {
+                    status => $status
+                });
+            }
+        } elsif ($action eq 'destroy_vm') {
+            my $vmid = $args[0];
+            # Check if VM exists and is stopped
+            my $status = `qm status $vmid 2>/dev/null`;
+            if ($status =~ /stopped/i) {
+                run_command(['qm', 'destroy', $vmid], undef, undef, 1);
+                _log_operation('INFO', "Destroyed VM: $vmid");
+            } else {
+                _log_operation('WARN', "VM not stopped, skipping destruction: $vmid", {
+                    status => $status
+                });
+            }
+        } elsif ($action eq 'restore_smb_conf') {
+            my $backup_file = $args[0];
+            if (-f $backup_file) {
+                run_command(['cp', $backup_file, '/etc/samba/smb.conf'], undef, undef, 1);
+                unlink $backup_file;
+                _log_operation('INFO', "Restored Samba configuration from: $backup_file");
+            } else {
+                _log_operation('WARN', "Samba backup file not found: $backup_file");
+            }
+        } elsif ($action eq 'remove_quota') {
+            my ($path, $fs_type) = @args;
+            _remove_quota_enhanced($path, $fs_type);
+        } elsif ($action eq 'zfs_remove_quota') {
+            my $dataset = $args[0];
+            run_command(['zfs', 'inherit', 'quota', $dataset], undef, undef, 1);
+            _log_operation('INFO', "Removed ZFS quota from dataset: $dataset");
+        } elsif ($action eq 'xfs_remove_quota') {
+            my ($project_id, $mount_point) = @args;
+            run_command(['xfs_quota', '-x', '-c', "limit -p bhard=0 $project_id", $mount_point], undef, undef, 1);
+            _log_operation('INFO', "Removed XFS quota for project: $project_id");
+        } elsif ($action eq 'user_remove_quota') {
+            my ($user, $mount_point) = @args;
+            run_command(['setquota', '-u', $user, '0', '0', '0', '0', $mount_point], undef, undef, 1);
+            _log_operation('INFO', "Removed user quota for: $user");
+        } elsif ($action eq 'ad_packages_installed') {
+            _log_operation('INFO', "AD packages were installed during setup - manual cleanup may be required");
+        } elsif ($action eq 'leave_ad_domain') {
+            my $domain = $args[0];
+            run_command(['realm', 'leave', $domain], undef, undef, 1);
+            _log_operation('INFO', "Left AD domain: $domain");
+        } elsif ($action eq 'ctdb_package_installed') {
+            _log_operation('INFO', "CTDB package was installed during setup - manual cleanup may be required");
+        } elsif ($action eq 'remove_ctdb_config_dir') {
+            if (-d '/etc/ctdb') {
+                run_command(['rm', '-rf', '/etc/ctdb'], undef, undef, 1);
+                _log_operation('INFO', "Removed CTDB configuration directory");
+            }
+        } elsif ($action eq 'remove_ctdb_nodes_file') {
+            if (-f '/etc/ctdb/nodes') {
+                unlink '/etc/ctdb/nodes';
+                _log_operation('INFO', "Removed CTDB nodes file");
+            }
+        } elsif ($action eq 'remove_ctdb_pa_file') {
+            if (-f '/etc/ctdb/public_addresses') {
+                unlink '/etc/ctdb/public_addresses';
+                _log_operation('INFO', "Removed CTDB public addresses file");
+            }
+        } elsif ($action eq 'stop_ctdb_service') {
+            run_command(['systemctl', 'stop', 'ctdb'], undef, undef, 1);
+            run_command(['systemctl', 'disable', 'ctdb'], undef, undef, 1);
+            _log_operation('INFO', "Stopped and disabled CTDB service");
+        } elsif ($action eq 'stop_ctdb_lxc') {
+            my $ctid = $args[0];
+            run_command(['pct', 'exec', $ctid, '--', 'systemctl', 'stop', 'ctdb'], undef, undef, 1);
+            _log_operation('INFO', "Stopped CTDB service in LXC container: $ctid");
+        } elsif ($action eq 'stop_ctdb_vm') {
+            my ($vmid, $vm_ip) = @args;
+            run_command(['ssh', "root\@$vm_ip", 'systemctl', 'stop', 'ctdb'], undef, undef, 1);
+            _log_operation('INFO', "Stopped CTDB service in VM: $vmid");
+        } elsif ($action eq 'stop_ctdb_native') {
+            run_command(['systemctl', 'stop', 'ctdb'], undef, undef, 1);
+            _log_operation('INFO', "Stopped CTDB service on native host");
+        } elsif ($action eq 'remove_user') {
+            my $username = $args[0];
+            run_command(['userdel', '-r', $username], undef, undef, 1);
+            _log_operation('INFO', "Removed user: $username");
+        } elsif ($action eq 'restore_network_config') {
+            my $backup_file = $args[0];
+            if (-f $backup_file) {
+                run_command(['cp', $backup_file, '/etc/network/interfaces'], undef, undef, 1);
+                unlink $backup_file;
+                _log_operation('INFO', "Restored network configuration from: $backup_file");
+            }
+        } elsif ($action eq 'restore_firewall_rules') {
+            my $backup_file = $args[0];
+            if (-f $backup_file) {
+                run_command(['iptables-restore', '<', $backup_file], undef, undef, 1);
+                unlink $backup_file;
+                _log_operation('INFO', "Restored firewall rules from: $backup_file");
+            }
+        } elsif ($action eq 'restore_systemd_services') {
+            my $backup_file = $args[0];
+            if (-f $backup_file) {
+                my $backup_data = file_read_all($backup_file);
+                my $services = decode_json($backup_data);
+                foreach my $service (keys %$services) {
+                    my $state = $services->{$service};
+                    if ($state eq 'enabled') {
+                        run_command(['systemctl', 'enable', $service], undef, undef, 1);
+                    } else {
+                        run_command(['systemctl', 'disable', $service], undef, undef, 1);
+                    }
+                }
+                unlink $backup_file;
+                _log_operation('INFO', "Restored systemd service states from: $backup_file");
+            }
+        }
+    };
+    
+    if ($@) {
+        _log_operation('ERROR', "Rollback step failed: $description", {
+            action => $action,
+            error => $@,
+            args => \@args
+        });
+        return 0;
+    }
+    
+    return 1;
+}
+
+sub _rollback_creation_enhanced {
+    my ($rollback_steps) = @_;
+    
+    return unless $rollback_steps && @$rollback_steps;
+    
+    _log_operation('INFO', "Starting enhanced rollback procedure", {
+        steps_count => scalar @$rollback_steps
+    });
+    
+    my $successful_steps = 0;
+    my $failed_steps = 0;
+    
+    # Execute rollback steps in reverse order
+    foreach my $step (reverse @$rollback_steps) {
+        # Validate step before execution
+        unless (_validate_rollback_step($step)) {
+            _log_operation('ERROR', "Invalid rollback step, skipping", { step => $step });
+            $failed_steps++;
+            next;
+        }
+        
+        # Execute the step
+        if (_execute_rollback_step($step)) {
+            $successful_steps++;
+        } else {
+            $failed_steps++;
+        }
+    }
+    
+    _log_operation('INFO', "Rollback procedure completed", {
+        successful_steps => $successful_steps,
+        failed_steps => $failed_steps,
+        total_steps => scalar @$rollback_steps
+    });
+    
+    return {
+        successful_steps => $successful_steps,
+        failed_steps => $failed_steps,
+        total_steps => scalar @$rollback_steps
+    };
+}
+
+sub _remove_quota_enhanced {
     my ($path, $fs_type) = @_;
+    
+    _log_operation('INFO', "Removing quota", {
+        path => $path,
+        fs_type => $fs_type
+    });
     
     eval {
         if ($fs_type eq 'zfs') {
@@ -2694,22 +3109,198 @@ sub _remove_quota {
             my $dataset = `zfs list | grep "$path" | awk '{print \$1}'`;
             chomp $dataset;
             if ($dataset) {
-                run_command(['zfs', 'inherit', 'quota', $dataset]);
+                run_command(['zfs', 'inherit', 'quota', $dataset], undef, undef, 1);
+                _log_operation('INFO', "Removed ZFS quota from dataset: $dataset");
+            } else {
+                _log_operation('WARN', "ZFS dataset not found for path: $path");
             }
         } elsif ($fs_type eq 'xfs') {
-            # Remove XFS project quota (implementation depends on how it was set)
-            warn "XFS quota removal not fully implemented";
+            # Remove XFS project quota
+            my $mount_point = `df $path | tail -1 | awk '{print \$6}'`;
+            chomp $mount_point;
+            if ($mount_point) {
+                # Find project ID for the path
+                my $project_id = `xfs_quota -x -c "report -p" $mount_point | grep "$path" | awk '{print \$1}'`;
+                chomp $project_id;
+                if ($project_id && $project_id =~ /^\d+$/) {
+                    run_command(['xfs_quota', '-x', '-c', "limit -p bhard=0 $project_id", $mount_point], undef, undef, 1);
+                    _log_operation('INFO', "Removed XFS quota for project: $project_id");
+                } else {
+                    _log_operation('WARN', "XFS project ID not found for path: $path");
+                }
+            }
         } else {
             # Remove user quota
             my $mount_point = `df $path | tail -1 | awk '{print \$6}'`;
             chomp $mount_point;
-            run_command(['setquota', '-u', 'root', '0', '0', '0', '0', $mount_point]);
+            if ($mount_point) {
+                run_command(['setquota', '-u', 'root', '0', '0', '0', '0', $mount_point], undef, undef, 1);
+                _log_operation('INFO', "Removed user quota from mount point: $mount_point");
+            } else {
+                _log_operation('WARN', "Mount point not found for path: $path");
+            }
         }
     };
     
     if ($@) {
-        warn "Failed to remove quota for $path: $@";
+        _log_operation('ERROR', "Failed to remove quota", {
+            path => $path,
+            fs_type => $fs_type,
+            error => $@
+        });
+        return 0;
     }
+    
+    return 1;
+}
+
+# -------- manual cleanup tools --------
+sub _create_cleanup_report {
+    my ($operation_id) = @_;
+    
+    my $report_file = "/var/log/pve/smbgateway-cleanup-$operation_id.json";
+    
+    my $report = {
+        operation_id => $operation_id,
+        timestamp => POSIX::strftime('%Y-%m-%d %H:%M:%S', localtime),
+        system_state => _get_system_state(),
+        recommendations => _generate_cleanup_recommendations()
+    };
+    
+    file_set_contents($report_file, encode_json($report));
+    
+    _log_operation('INFO', "Cleanup report generated", {
+        operation_id => $operation_id,
+        report_file => $report_file
+    });
+    
+    return $report_file;
+}
+
+sub _get_system_state {
+    my $state = {
+        containers => [],
+        vms => [],
+        samba_shares => [],
+        ctdb_status => undef,
+        ad_status => undef,
+        quota_status => []
+    };
+    
+    # Check for SMB Gateway containers
+    my $ct_list = `pct list | grep smbgateway`;
+    if ($ct_list) {
+        foreach my $line (split /\n/, $ct_list) {
+            my ($vmid, $status, $name) = split /\s+/, $line;
+            push @{$state->{containers}}, {
+                vmid => $vmid,
+                status => $status,
+                name => $name
+            };
+        }
+    }
+    
+    # Check for SMB Gateway VMs
+    my $vm_list = `qm list | grep smbgateway`;
+    if ($vm_list) {
+        foreach my $line (split /\n/, $vm_list) {
+            my ($vmid, $status, $name) = split /\s+/, $line;
+            push @{$state->{vms}}, {
+                vmid => $vmid,
+                status => $status,
+                name => $name
+            };
+        }
+    }
+    
+    # Check Samba shares
+    if (-f '/etc/samba/smb.conf') {
+        my $smb_conf = file_read_all('/etc/samba/smb.conf');
+        while ($smb_conf =~ /\[([^\]]+)\]/g) {
+            my $share = $1;
+            next if $share =~ /^(global|homes|printers)$/;
+            push @{$state->{samba_shares}}, $share;
+        }
+    }
+    
+    # Check CTDB status
+    if (-f '/etc/ctdb/nodes') {
+        $state->{ctdb_status} = 'configured';
+        my $ctdb_status = `ctdb status 2>/dev/null`;
+        if ($ctdb_status) {
+            $state->{ctdb_status} = 'running';
+        }
+    }
+    
+    # Check AD status
+    my $realm_status = `realm list 2>/dev/null`;
+    if ($realm_status) {
+        $state->{ad_status} = 'joined';
+    }
+    
+    return $state;
+}
+
+sub _generate_cleanup_recommendations {
+    my $state = _get_system_state();
+    my $recommendations = [];
+    
+    # Check for orphaned containers
+    foreach my $ct (@{$state->{containers}}) {
+        push @$recommendations, {
+            type => 'container_cleanup',
+            severity => 'medium',
+            description => "SMB Gateway container found: $ct->{name} (ID: $ct->{vmid})",
+            action => "pct destroy $ct->{vmid}",
+            details => "Container status: $ct->{status}"
+        };
+    }
+    
+    # Check for orphaned VMs
+    foreach my $vm (@{$state->{vms}}) {
+        push @$recommendations, {
+            type => 'vm_cleanup',
+            severity => 'medium',
+            description => "SMB Gateway VM found: $vm->{name} (ID: $vm->{vmid})",
+            action => "qm destroy $vm->{vmid}",
+            details => "VM status: $vm->{status}"
+        };
+    }
+    
+    # Check for orphaned Samba shares
+    foreach my $share (@{$state->{samba_shares}}) {
+        push @$recommendations, {
+            type => 'share_cleanup',
+            severity => 'low',
+            description => "Samba share found: $share",
+            action => "Remove from /etc/samba/smb.conf",
+            details => "Manual cleanup required"
+        };
+    }
+    
+    # Check for CTDB configuration
+    if ($state->{ctdb_status}) {
+        push @$recommendations, {
+            type => 'ctdb_cleanup',
+            severity => 'medium',
+            description => "CTDB configuration found",
+            action => "Remove /etc/ctdb directory",
+            details => "CTDB status: $state->{ctdb_status}"
+        };
+    }
+    
+    # Check for AD domain
+    if ($state->{ad_status}) {
+        push @$recommendations, {
+            type => 'ad_cleanup',
+            severity => 'high',
+            description => "AD domain joined",
+            action => "realm leave <domain>",
+            details => "Manual cleanup required"
+        };
+    }
+    
+    return $recommendations;
 }
 
 # -------- missing helper methods --------
@@ -2824,7 +3415,7 @@ sub _join_ad_domain_native {
     if ($packages_needed) {
         run_command(['apt-get', 'update']);
         run_command(['apt-get', 'install', '-y', @required_packages]);
-        push @$rollback_steps, ['ad_packages_installed'];
+        _add_rollback_step('ad_packages_installed', "AD packages were installed during setup");
     }
     
     # Discover domain
@@ -2859,7 +3450,7 @@ expect eof
         }
     } else {
         # Add rollback step for domain leave
-        push @$rollback_steps, ['leave_ad_domain', $domain];
+        _add_rollback_step('leave_ad_domain', "Leave AD domain: $domain", $domain);
     }
     
     return {
