@@ -354,8 +354,9 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: documentation
-        path: docs/*.pdf
-        path: docs/*.html
+        path: |
+          docs/*.pdf
+          docs/*.html
 
   # Job 10: Final Quality Check
   quality-check:

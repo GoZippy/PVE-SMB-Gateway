@@ -498,23 +498,49 @@ Click "Next" to begin the system check.
         self.check_results_text.config(state=tk.NORMAL)
         self.check_results_text.delete(1.0, tk.END)
         
+        # Add header
+        self.check_results_text.insert(tk.END, "System Check Results:\n")
+        self.check_results_text.insert(tk.END, "=" * 50 + "\n\n")
+        
         all_passed = True
+        windows_mode = os.name == 'nt'
+        
         for description, result in results:
             status = "PASS" if result else "FAIL"
-            color = "green" if result else "red"
+            
+            # Special handling for Windows
+            if windows_mode and description == "Checking Proxmox VE installation" and not result:
+                status = "SKIP (Windows)"
+                result = True  # Don't count this as a failure on Windows
+            
             self.check_results_text.insert(tk.END, f"{description}: {status}\n")
             if not result:
                 all_passed = False
+        
+        # Add Windows-specific information
+        if windows_mode:
+            self.check_results_text.insert(tk.END, "\n" + "=" * 50 + "\n")
+            self.check_results_text.insert(tk.END, "Windows Mode Information:\n")
+            self.check_results_text.insert(tk.END, "- This installer is preparing for Proxmox installation\n")
+            self.check_results_text.insert(tk.END, "- Proxmox VE check is skipped on Windows (expected)\n")
+            self.check_results_text.insert(tk.END, "- You can proceed to configure installation options\n")
+            self.check_results_text.insert(tk.END, "- Actual installation will be done on Proxmox server\n")
         
         self.check_results_text.config(state=tk.DISABLED)
         
         if all_passed:
             self.install_state['system_check'] = True
             self.progress_vars[0].set(True)
-            self.status_var.set("System check passed - ready to proceed")
+            if windows_mode:
+                self.status_var.set("System check completed - ready to configure installation")
+            else:
+                self.status_var.set("System check passed - ready to proceed")
             self.next_button.config(state="normal")
         else:
-            self.status_var.set("System check failed - please resolve issues")
+            if windows_mode:
+                self.status_var.set("System check completed with warnings - review results")
+            else:
+                self.status_var.set("System check failed - please resolve issues")
     
     def next_step(self):
         """Move to next installation step"""
