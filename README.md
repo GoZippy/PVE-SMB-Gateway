@@ -1,6 +1,6 @@
 # PVE SMB Gateway - Alpha Release
 
-[![Build Status](https://github.com/ZippyNetworks/pve-smb-gateway/workflows/CI%2FCD%20Pipeline/badge.svg)](https://github.com/ZippyNetworks/pve-smb-gateway/actions)
+[![Build Status](https://github.com/GoZippy/PVE-SMB-Gateway/workflows/CI%2FCD%20Pipeline/badge.svg)](https://github.com/GoZippy/PVE-SMB-Gateway/actions)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://opensource.org/licenses/AGPL-3.0)
 [![Proxmox VE](https://img.shields.io/badge/Proxmox%20VE-8.x-green.svg)](https://proxmox.com)
 
@@ -77,12 +77,59 @@ The PVE SMB Gateway plugin is now in **alpha testing** with core functionality w
 
 ## 📦 **Quick Installation (2 minutes)**
 
+### **Option 1: GUI Installer (Recommended)**
+
+The PVE SMB Gateway includes a **comprehensive GUI installer** that provides step-by-step guidance:
+
+**Linux/Proxmox Systems:**
+```bash
+git clone https://github.com/GoZippy/PVE-SMB-Gateway.git
+cd PVE-SMB-Gateway
+./installer/run-installer.sh
+```
+
+**Windows Systems:**
+```powershell
+git clone https://github.com/GoZippy/PVE-SMB-Gateway.git
+cd PVE-SMB-Gateway
+.\installer\run-installer.ps1
+```
+
+The GUI installer provides:
+- ✅ **Step-by-step guidance** with explanations
+- ✅ **System compatibility checks**
+- ✅ **Real-time progress tracking**
+- ✅ **Command preview** before execution
+- ✅ **Pause/Resume** installation control
+- ✅ **Detailed logging** and error handling
+
+### **Option 2: Manual Installation**
+
 ```bash
 # Download and install
-wget https://github.com/ZippyNetworks/pve-smb-gateway/releases/download/v0.1.0/pve-plugin-smbgateway_0.1.0-1_all.deb
+wget https://github.com/GoZippy/PVE-SMB-Gateway/releases/download/v0.1.0/pve-plugin-smbgateway_0.1.0-1_all.deb
 sudo dpkg -i pve-plugin-smbgateway_0.1.0-1_all.deb
 sudo systemctl restart pveproxy
 ```
+
+## 🧪 **Testing Your Installation**
+
+Before using in production, test your installation:
+
+### **Quick Test (5 minutes)**
+```bash
+# Set your cluster info
+export CLUSTER_NODES="192.168.1.10 192.168.1.11 192.168.1.12"
+export CLUSTER_VIP="192.168.1.100"
+
+# Run automated tests
+./scripts/automated_cluster_test.sh
+```
+
+### **Full Testing Guide**
+- [Quick Start Guide](QUICK_START.md) - 5-minute setup
+- [Getting Started Guide](docs/GETTING_STARTED.md) - Complete step-by-step instructions
+- [Automated Testing Guide](docs/AUTOMATED_TESTING.md) - Advanced testing options
 
 ## 🖥️ **Create Your First Share (1 minute)**
 
@@ -360,7 +407,7 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 ### **Development Setup**
 ```bash
-git clone https://github.com/ZippyNetworks/pve-smb-gateway.git
+git clone https://github.com/GoZippy/PVE-SMB-Gateway.git
 cd pve-smb-gateway
 ./scripts/build_package.sh
 sudo dpkg -i ../pve-plugin-smbgateway_*_all.deb
@@ -384,7 +431,7 @@ make test-ha          # HA failover tests
 
 - **Maintainer**: Eric Henderson <eric@gozippy.com>
 - **Website**: https://gozippy.com
-- **GitHub**: https://github.com/ZippyNetworks/pve-smb-gateway
+- **GitHub**: https://github.com/GoZippy/PVE-SMB-Gateway
 - **Commercial Inquiries**: eric@gozippy.com
 
 ## 🙏 **Acknowledgments**

@@ -11,6 +11,10 @@ on:
         description: 'Comma-separated list of cluster node IPs'
         required: true
         default: '192.168.1.10,192.168.1.11,192.168.1.12'
+      repository:
+        description: 'Repository to test'
+        required: false
+        default: 'GoZippy/PVE-SMB-Gateway'
       test_environment:
         description: 'Test environment type'
         required: true

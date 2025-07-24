@@ -21,4 +21,18 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.log
-*.zip 
+*.zip
+
+# Local configuration files (never commit these!)
+.env.local
+.env.cluster
+test-my-cluster.sh
+cluster-config.sh
+local-settings.sh
+*-local.sh
+*-cluster.sh
+
+# Test results (may contain sensitive info)
+/tmp/pve-smbgateway-*-test-results/
+test-results/
+performance-results.json 

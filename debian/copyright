@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: pve-plugin-smbgateway
-Source: https://github.com/ZippyNetworks/proxmox-smb-gateway
+Source: https://github.com/GoZippy/PVE-SMB-Gateway
 
 Files: *
 Copyright: 2025, Eric Henderson <eric@gozippy.com>

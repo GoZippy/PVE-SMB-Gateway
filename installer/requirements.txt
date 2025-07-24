@@ -1,0 +1,2 @@
+# Python dependencies for PVE SMB Gateway Installer
+# No external dependencies required for basic functionality

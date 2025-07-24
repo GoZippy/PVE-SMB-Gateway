@@ -84,10 +84,29 @@ The PVE SMB Gateway plugin is now available for **alpha testing**! This release 
 
 ```bash
 # Download and install
-wget https://github.com/ZippyNetworks/pve-smb-gateway/releases/download/v0.1.0/pve-plugin-smbgateway_0.1.0-1_all.deb
+wget https://github.com/GoZippy/PVE-SMB-Gateway/releases/download/v0.1.0/pve-plugin-smbgateway_0.1.0-1_all.deb
 sudo dpkg -i pve-plugin-smbgateway_0.1.0-1_all.deb
 sudo systemctl restart pveproxy
 ```
+
+## 🧪 **Testing Your Installation**
+
+**IMPORTANT**: Before using in production, thoroughly test your installation:
+
+### **Quick Test (5 minutes)**
+```bash
+# Set your cluster info
+export CLUSTER_NODES="192.168.1.10 192.168.1.11 192.168.1.12"
+export CLUSTER_VIP="192.168.1.100"
+
+# Run automated tests
+./scripts/automated_cluster_test.sh
+```
+
+### **Testing Documentation**
+- [Quick Start Guide](QUICK_START.md) - 5-minute setup for testing
+- [Getting Started Guide](docs/GETTING_STARTED.md) - Complete step-by-step testing instructions
+- [Automated Testing Guide](docs/AUTOMATED_TESTING.md) - Advanced testing options and CI/CD integration
 
 ## 🖥️ **Quick Start**
 
@@ -274,7 +293,7 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 ### **Development Setup**
 ```bash
-git clone https://github.com/ZippyNetworks/pve-smb-gateway.git
+git clone https://github.com/GoZippy/PVE-SMB-Gateway.git
 cd pve-smb-gateway
 ./scripts/build_package.sh
 sudo dpkg -i ../pve-plugin-smbgateway_*_all.deb
@@ -285,7 +304,7 @@ sudo systemctl restart pveproxy
 
 - **Maintainer**: Eric Henderson <eric@gozippy.com>
 - **Website**: https://gozippy.com
-- **GitHub**: https://github.com/ZippyNetworks/pve-smb-gateway
+- **GitHub**: https://github.com/GoZippy/PVE-SMB-Gateway
 - **Commercial Inquiries**: eric@gozippy.com
 
 ---

@@ -350,3 +350,29 @@ Ext.define('PVE.dc.StorageView_SMBAware', {
         me.callParent();
     }
 });
+
+// Add SMB Gateway to main navigation
+Ext.define('PVE.dc.MainView_SMBAware', {
+    override: 'PVE.dc.MainView',
+    initComponent: function() {
+        var me = this;
+        
+        // Add SMB Gateway to the main menu
+        me.addMainMenuButton('smbgateway', 'SMB Gateway', 'PVE.SMBGatewayDashboard', 'fa fa-share-alt');
+        
+        me.callParent();
+    }
+});
+
+// Add settings to system menu
+Ext.define('PVE.dc.SystemView_SMBAware', {
+    override: 'PVE.dc.SystemView',
+    initComponent: function() {
+        var me = this;
+        
+        // Add SMB Gateway settings to system menu
+        me.addSystemMenuButton('smbgateway-settings', 'SMB Gateway Settings', 'PVE.SMBGatewaySettings', 'fa fa-cog');
+        
+        me.callParent();
+    }
+});

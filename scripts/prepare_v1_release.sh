@@ -211,7 +211,7 @@ PVE SMB Gateway v${RELEASE_VERSION} is the first production-ready release with c
 ### Quick Installation
 \`\`\`bash
 # Download and install
-wget https://github.com/ZippyNetworks/pve-smb-gateway/releases/download/v${RELEASE_VERSION}/pve-plugin-smbgateway_${RELEASE_VERSION}-1_all.deb
+wget https://github.com/GoZippy/PVE-SMB-Gateway/releases/download/v${RELEASE_VERSION}/pve-plugin-smbgateway_${RELEASE_VERSION}-1_all.deb
 sudo dpkg -i pve-plugin-smbgateway_${RELEASE_VERSION}-1_all.deb
 sudo systemctl restart pveproxy
 \`\`\`
@@ -326,9 +326,9 @@ pve-smbgateway batch create --config shares.json --parallel 3
 ## 🤝 Community and Support
 
 ### Community Resources
-- **[GitHub Issues](https://github.com/ZippyNetworks/pve-smb-gateway/issues)**: Bug reports and feature requests
+- **[GitHub Issues](https://github.com/GoZippy/PVE-SMB-Gateway/issues)**: Bug reports and feature requests
 - **[Proxmox Forum](https://forum.proxmox.com)**: Community discussion
-- **[Discussions](https://github.com/ZippyNetworks/pve-smb-gateway/discussions)**: Questions and community support
+- **[Discussions](https://github.com/GoZippy/PVE-SMB-Gateway/discussions)**: Questions and community support
 
 ### Professional Support
 - **Email Support**: eric@gozippy.com
@@ -409,8 +409,8 @@ Installation Instructions:
 
 Support:
 - Email: eric@gozippy.com
-- GitHub: https://github.com/ZippyNetworks/pve-smb-gateway
-- Documentation: https://github.com/ZippyNetworks/pve-smb-gateway/tree/main/docs
+- GitHub: https://github.com/GoZippy/PVE-SMB-Gateway
+- Documentation: https://github.com/GoZippy/PVE-SMB-Gateway/tree/main/docs
 
 License:
 - Community: AGPL-3.0
@@ -511,12 +511,12 @@ echo "2. Create your first SMB share"
 echo "3. Test connectivity from your clients"
 echo
 echo "Documentation:"
-echo "- User Guide: https://github.com/ZippyNetworks/pve-smb-gateway/blob/main/docs/USER_GUIDE.md"
+echo "- User Guide: https://github.com/GoZippy/PVE-SMB-Gateway/blob/main/docs/USER_GUIDE.md"
 echo "- CLI Reference: pve-smbgateway --help"
 echo
 echo "Support:"
 echo "- Email: eric@gozippy.com"
-echo "- GitHub: https://github.com/ZippyNetworks/pve-smb-gateway"
+echo "- GitHub: https://github.com/GoZippy/PVE-SMB-Gateway"
 EOF
     
     chmod +x "$RELEASE_DIR/install.sh"
@@ -640,7 +640,7 @@ create_release_summary() {
 ### Quick Start
 \`\`\`bash
 # Download and install
-wget https://github.com/ZippyNetworks/pve-smb-gateway/releases/download/v${RELEASE_VERSION}/pve-plugin-smbgateway_${RELEASE_VERSION}-1_all.deb
+wget https://github.com/GoZippy/PVE-SMB-Gateway/releases/download/v${RELEASE_VERSION}/pve-plugin-smbgateway_${RELEASE_VERSION}-1_all.deb
 sudo dpkg -i pve-plugin-smbgateway_${RELEASE_VERSION}-1_all.deb
 sudo systemctl restart pveproxy
 \`\`\`
@@ -822,7 +822,7 @@ git push origin v${RELEASE_VERSION}
 \`\`\`
 
 ### 2. Create GitHub Release
-1. Go to [GitHub Releases](https://github.com/ZippyNetworks/pve-smb-gateway/releases)
+1. Go to [GitHub Releases](https://github.com/GoZippy/PVE-SMB-Gateway/releases)
 2. Click "Create a new release"
 3. Tag: \`v${RELEASE_VERSION}\`
 4. Title: \`PVE SMB Gateway v${RELEASE_VERSION} - Production Release\`
@@ -850,7 +850,7 @@ Post in the [Proxmox Community Forum](https://forum.proxmox.com/threads/feature-
 **Subject**: \`[RELEASE] PVE SMB Gateway v${RELEASE_VERSION} - Production Ready!\`
 
 ### 2. GitHub Discussions
-Create a discussion in [GitHub Discussions](https://github.com/ZippyNetworks/pve-smb-gateway/discussions)
+Create a discussion in [GitHub Discussions](https://github.com/GoZippy/PVE-SMB-Gateway/discussions)
 
 **Title**: \`🎉 PVE SMB Gateway v${RELEASE_VERSION} Released!\`
 
@@ -899,7 +899,7 @@ Create a discussion in [GitHub Discussions](https://github.com/ZippyNetworks/pve
 ## Contact Information
 
 - **Maintainer**: Eric Henderson <eric@gozippy.com>
-- **GitHub**: https://github.com/ZippyNetworks/pve-smb-gateway
+- **GitHub**: https://github.com/GoZippy/PVE-SMB-Gateway
 - **Commercial Inquiries**: eric@gozippy.com
 
 ---

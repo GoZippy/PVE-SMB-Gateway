@@ -30,7 +30,7 @@
 
 ```bash
 # Download the latest release
-wget https://github.com/ZippyNetworks/pve-smb-gateway/releases/download/v1.0.0/pve-plugin-smbgateway_1.0.0-1_all.deb
+wget https://github.com/GoZippy/PVE-SMB-Gateway/releases/download/v1.0.0/pve-plugin-smbgateway_1.0.0-1_all.deb
 
 # Install the package
 sudo dpkg -i pve-plugin-smbgateway_1.0.0-1_all.deb
