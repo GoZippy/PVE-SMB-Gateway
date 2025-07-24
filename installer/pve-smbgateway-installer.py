@@ -375,75 +375,120 @@ Click "Next" to begin the system check.
     def check_proxmox(self):
         """Check if Proxmox VE is installed"""
         try:
-            result = subprocess.run(['pveversion'], capture_output=True, text=True)
-            return result.returncode == 0
+            # On Windows, we can't check for Proxmox directly
+            # This is expected to fail on Windows
+            if os.name == 'nt':  # Windows
+                return False
+            else:  # Linux/Unix
+                result = subprocess.run(['pveversion'], capture_output=True, text=True)
+                return result.returncode == 0
         except:
             return False
     
     def check_requirements(self):
         """Check system requirements"""
         try:
-            # Check OS
-            with open('/etc/os-release', 'r') as f:
-                content = f.read()
-                if 'debian' not in content.lower():
+            if os.name == 'nt':  # Windows
+                # Check Windows version
+                import platform
+                win_version = platform.win32_ver()
+                return True  # Assume Windows is compatible for preparation
+            else:  # Linux/Unix
+                # Check OS
+                with open('/etc/os-release', 'r') as f:
+                    content = f.read()
+                    if 'debian' not in content.lower():
+                        return False
+                
+                # Check kernel
+                result = subprocess.run(['uname', '-r'], capture_output=True, text=True)
+                if result.returncode != 0:
                     return False
-            
-            # Check kernel
-            result = subprocess.run(['uname', '-r'], capture_output=True, text=True)
-            if result.returncode != 0:
-                return False
-            
-            return True
+                
+                return True
         except:
             return False
     
     def check_dependencies(self):
         """Check if required dependencies are available"""
-        dependencies = ['perl', 'python3', 'make', 'dpkg-buildpackage', 'git']
-        
-        for dep in dependencies:
-            try:
-                result = subprocess.run(['which', dep], capture_output=True)
-                if result.returncode != 0:
-                    return False
-            except:
-                return False
-        
-        return True
+        try:
+            if os.name == 'nt':  # Windows
+                # Check for Python and basic tools
+                dependencies = ['python', 'git']
+                
+                for dep in dependencies:
+                    try:
+                        if dep == 'python':
+                            result = subprocess.run(['python', '--version'], capture_output=True)
+                        else:
+                            result = subprocess.run(['where', dep], capture_output=True)
+                        if result.returncode != 0:
+                            return False
+                    except:
+                        return False
+                
+                return True
+            else:  # Linux/Unix
+                dependencies = ['perl', 'python3', 'make', 'dpkg-buildpackage', 'git']
+                
+                for dep in dependencies:
+                    try:
+                        result = subprocess.run(['which', dep], capture_output=True)
+                        if result.returncode != 0:
+                            return False
+                    except:
+                        return False
+                
+                return True
+        except:
+            return False
     
     def check_disk_space(self):
         """Check available disk space"""
         try:
-            result = subprocess.run(['df', '/'], capture_output=True, text=True)
-            lines = result.stdout.strip().split('\n')
-            if len(lines) >= 2:
-                parts = lines[1].split()
-                if len(parts) >= 4:
-                    available_gb = int(parts[3]) / (1024 * 1024)
-                    return available_gb >= 1.0  # At least 1GB
-            return False
+            if os.name == 'nt':  # Windows
+                import shutil
+                total, used, free = shutil.disk_usage("C:\\")
+                free_gb = free / (1024**3)
+                return free_gb >= 1.0  # At least 1GB
+            else:  # Linux/Unix
+                result = subprocess.run(['df', '/'], capture_output=True, text=True)
+                lines = result.stdout.strip().split('\n')
+                if len(lines) >= 2:
+                    parts = lines[1].split()
+                    if len(parts) >= 4:
+                        available_gb = int(parts[3]) / (1024 * 1024)
+                        return available_gb >= 1.0  # At least 1GB
+                return False
         except:
             return False
     
     def check_permissions(self):
         """Check if user has required permissions"""
         try:
-            # Check if running as root
-            result = subprocess.run(['whoami'], capture_output=True, text=True)
-            if result.stdout.strip() == 'root':
-                return True
-            
-            # Check sudo access
-            result = subprocess.run(['sudo', '-n', 'true'], capture_output=True)
-            return result.returncode == 0
+            if os.name == 'nt':  # Windows
+                # Check if running as administrator
+                import ctypes
+                return ctypes.windll.shell32.IsUserAnAdmin() != 0
+            else:  # Linux/Unix
+                # Check if running as root
+                result = subprocess.run(['whoami'], capture_output=True, text=True)
+                if result.stdout.strip() == 'root':
+                    return True
+                
+                # Check sudo access
+                result = subprocess.run(['sudo', '-n', 'true'], capture_output=True)
+                return result.returncode == 0
         except:
             return False
     
     def check_network(self):
         """Check network connectivity"""
         try:
-            result = subprocess.run(['ping', '-c', '1', '8.8.8.8'], capture_output=True)
+            if os.name == 'nt':  # Windows
+                result = subprocess.run(['ping', '-n', '1', '8.8.8.8'], capture_output=True)
+            else:  # Linux/Unix
+                result = subprocess.run(['ping', '-c', '1', '8.8.8.8'], capture_output=True)
             return result.returncode == 0
         except:
             return False
