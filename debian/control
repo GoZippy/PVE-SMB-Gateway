@@ -7,5 +7,5 @@ Build-Depends: debhelper-compat (= 13), perl, pve-manager (>= 8.0)
 
 Package: pve-plugin-smbgateway
 Architecture: all
-Depends: ${misc:Depends}, samba, pve-manager (>= 8.0), perl, libdbi-perl, libdbd-sqlite3-perl, libjson-pp-perl, libfile-path-perl, libfile-basename-perl
+Depends: ${misc:Depends}, samba, pve-manager (>= 8.0), perl, libdbi-perl, libdbd-sqlite3-perl, libjson-pp-perl, libfile-path-perl, libfile-basename-perl, libsys-hostname-perl, quota, xfsprogs
 Description: PVE storage plugin to export ZFS/Ceph pools via SMB using native/LXC/VM gateways.

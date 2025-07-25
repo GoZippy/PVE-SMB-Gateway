@@ -7,6 +7,7 @@ PVE/SMBGateway/Monitor.pm usr/share/perl5/PVE/SMBGateway/
 PVE/SMBGateway/Backup.pm usr/share/perl5/PVE/SMBGateway/
 PVE/SMBGateway/Security.pm usr/share/perl5/PVE/SMBGateway/
 PVE/SMBGateway/CLI.pm usr/share/perl5/PVE/SMBGateway/
+PVE/SMBGateway/QuotaManager.pm usr/share/perl5/PVE/SMBGateway/
 
 # Web interface files
 www/ext6/pvemanager6/smb-gateway.js usr/share/pve-manager/ext6/pvemanager6/

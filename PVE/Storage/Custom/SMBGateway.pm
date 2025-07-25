@@ -16,7 +16,7 @@ use PVE::Exception qw(raise_param_exc);
 use PVE::SMBGateway::Monitor;
 use PVE::SMBGateway::Backup;
 use PVE::SMBGateway::Security;
-use PVE::SMBGateway::Security;
+use PVE::SMBGateway::QuotaManager;
 use PVE::JSONSchema qw(get_standard_option);
 use Time::HiRes qw(time);
 use JSON::PP;
