@@ -48,6 +48,81 @@ flowchart TD
     U --> Z[Update Configuration]
 ```
 
+## Installation and Setup Flow
+
+### Initial Installation Process
+
+```mermaid
+flowchart TD
+    A[User Downloads Plugin] --> B{Installation Method}
+    
+    B -->|GUI Installer| C[Run GUI Installer]
+    B -->|Manual Install| D[Download .deb Package]
+    B -->|Docker| E[Docker Installation]
+    
+    C --> F[System Compatibility Check]
+    D --> G[Install via dpkg]
+    E --> H[Docker Container Setup]
+    
+    F --> I{Compatibility OK?}
+    I -->|Yes| J[Install Dependencies]
+    I -->|No| K[Show Compatibility Issues]
+    
+    J --> L[Build Plugin Package]
+    G --> M[Restart Proxmox Services]
+    H --> N[Configure Container]
+    
+    L --> M
+    K --> O[User Fixes Issues]
+    O --> F
+    
+    M --> P[Plugin Available in Web UI]
+    N --> P
+    
+    P --> Q[User Can Create Shares]
+```
+
+### GUI Installer Flow (Windows/Linux)
+
+```mermaid
+flowchart TD
+    A[Launch GUI Installer] --> B[Show Welcome Screen]
+    B --> C[System Requirements Check]
+    C --> D{Requirements Met?}
+    
+    D -->|Yes| E[Installation Options]
+    D -->|No| F[Show Missing Requirements]
+    
+    F --> G[User Installs Requirements]
+    G --> C
+    
+    E --> H{Installation Type}
+    H -->|Full Install| I[Complete Installation]
+    H -->|Dependencies Only| J[Install Dependencies]
+    H -->|Check Only| K[System Validation]
+    
+    I --> L[Download Plugin]
+    L --> M[Install Plugin]
+    M --> N[Configure Services]
+    N --> O[Test Installation]
+    
+    J --> P[Install Python Dependencies]
+    P --> Q[Install System Packages]
+    
+    K --> R[Validate System]
+    R --> S[Generate Report]
+    
+    O --> T{Installation Success?}
+    T -->|Yes| U[Show Success Message]
+    T -->|No| V[Show Error Details]
+    
+    Q --> W[Installation Complete]
+    S --> W
+    U --> W
+    V --> X[User Troubleshoots]
+    X --> I
+```
+
 ## Detailed Process Flows
 
 ### 1. Initial Setup and Configuration
@@ -465,6 +540,99 @@ flowchart TD
     W --> X
 ```
 
+### 9. Troubleshooting Flow
+
+```mermaid
+flowchart TD
+    A[User Reports Issue] --> B[Identify Issue Type]
+    B --> C{Issue Category}
+    
+    C -->|Share Not Accessible| D[Check SMB Service Status]
+    C -->|AD Authentication Failed| E[Test AD Connectivity]
+    C -->|HA Failover Issues| F[Check CTDB Status]
+    C -->|Performance Problems| G[Analyze Performance Metrics]
+    C -->|Quota Issues| H[Check Quota Configuration]
+    C -->|Installation Problems| I[Verify Installation]
+    
+    D --> J{SMB Service Running?}
+    J -->|Yes| K[Check Network/Firewall]
+    J -->|No| L[Restart SMB Services]
+    
+    E --> M{AD Domain Reachable?}
+    M -->|Yes| N[Check Credentials]
+    M -->|No| O[Check DNS/Network]
+    
+    F --> P{CTDB Cluster Healthy?}
+    P -->|Yes| Q[Check VIP Configuration]
+    P -->|No| R[Reconfigure CTDB]
+    
+    G --> S[Review Performance Data]
+    S --> T[Identify Bottlenecks]
+    T --> U[Optimize Configuration]
+    
+    H --> V{Quota Applied Correctly?}
+    V -->|Yes| W[Check Filesystem Support]
+    V -->|No| X[Reapply Quotas]
+    
+    I --> Y{Plugin Installed?}
+    Y -->|Yes| Z[Check Service Status]
+    Y -->|No| AA[Reinstall Plugin]
+    
+    K --> BB[Issue Resolved?]
+    L --> BB
+    N --> BB
+    O --> BB
+    Q --> BB
+    R --> BB
+    U --> BB
+    W --> BB
+    X --> BB
+    Z --> BB
+    AA --> BB
+    
+    BB -->|Yes| CC[Document Solution]
+    BB -->|No| DD[Escalate to Advanced Troubleshooting]
+    
+    CC --> EE[Update Documentation]
+    DD --> FF[Manual Investigation Required]
+```
+
+### 10. Performance Monitoring Flow
+
+```mermaid
+flowchart TD
+    A[Performance Monitoring] --> B[Collect Metrics]
+    B --> C[I/O Statistics]
+    B --> D[Connection Statistics]
+    B --> E[System Statistics]
+    B --> F[Quota Statistics]
+    
+    C --> G[Store in Database]
+    D --> G
+    E --> G
+    F --> G
+    
+    G --> H[Analyze Trends]
+    H --> I[Generate Reports]
+    I --> J{Performance Issues?}
+    
+    J -->|Yes| K[Trigger Alerts]
+    J -->|No| L[Continue Monitoring]
+    
+    K --> M[Send Notifications]
+    M --> N[Update Dashboard]
+    N --> O[Log Alert]
+    
+    L --> P[Update Dashboard]
+    P --> Q[Archive Old Data]
+    Q --> R[Continue Monitoring]
+    
+    O --> S[User Reviews Alert]
+    S --> T[User Takes Action]
+    T --> U[Monitor Resolution]
+    U --> V[Alert Cleared]
+```
+
 ## User Decision Points
 
 ### Mode Selection Decision Tree
@@ -518,6 +686,57 @@ flowchart TD
     K --> L[Create Share]
 ```
 
+### Troubleshooting Decision Tree
+
+```mermaid
+flowchart TD
+    A[Issue Occurs] --> B{Issue Type}
+    
+    B -->|Share Not Accessible| C[Check Service Status]
+    B -->|Authentication Failed| D[Check AD/Local Auth]
+    B -->|Performance Issues| E[Check Resource Usage]
+    B -->|HA Problems| F[Check Cluster Status]
+    B -->|Quota Issues| G[Check Quota Configuration]
+    
+    C --> H{Service Running?}
+    H -->|Yes| I[Check Network/Firewall]
+    H -->|No| J[Restart Service]
+    
+    D --> K{Auth Method}
+    K -->|AD| L[Test AD Connectivity]
+    K -->|Local| M[Check User Configuration]
+    
+    E --> N{Resource Type}
+    N -->|CPU| O[Check CPU Usage]
+    N -->|Memory| P[Check Memory Usage]
+    N -->|Disk| Q[Check I/O Performance]
+    
+    F --> R{Cluster Status}
+    R -->|Healthy| S[Check VIP Configuration]
+    R -->|Unhealthy| T[Reconfigure Cluster]
+    
+    G --> U{Quota Type}
+    U -->|ZFS| V[Check ZFS Quota]
+    U -->|XFS| W[Check XFS Quota]
+    U -->|User| X[Check User Quota]
+    
+    I --> Y[Issue Resolved?]
+    J --> Y
+    L --> Y
+    M --> Y
+    O --> Y
+    P --> Y
+    Q --> Y
+    S --> Y
+    T --> Y
+    V --> Y
+    W --> Y
+    X --> Y
+    
+    Y -->|Yes| Z[Document Solution]
+    Y -->|No| AA[Escalate to Advanced Support]
+```
+
 ## Error Recovery Paths
 
 ### Common Error Scenarios
@@ -547,6 +766,16 @@ flowchart TD
    - Suggest alternative configurations
    - Manual resource allocation
 
+6. **Service Startup Failure**
+   - Automatic service restart
+   - Dependency checking
+   - Manual service configuration
+
+7. **Network Connectivity Issues**
+   - Network diagnostic tools
+   - Firewall configuration check
+   - Manual network setup
+
 ## Success Metrics
 
 ### User Experience Metrics
@@ -563,6 +792,13 @@ flowchart TD
 - **Failover Time**: < 30 seconds for HA failover
 - **Backup Performance**: < 5% performance impact during backup
 
+### Operational Metrics
+
+- **Mean Time to Resolution**: < 15 minutes for common issues
+- **User Satisfaction**: > 90% satisfaction rate
+- **Feature Usage**: > 70% adoption of advanced features
+- **Support Requests**: < 5% of installations require support
+
 ## Conclusion
 
 The PVE SMB Gateway user process flow is designed to be:
@@ -573,5 +809,7 @@ The PVE SMB Gateway user process flow is designed to be:
 4. **Efficient**: Optimized for common use cases
 5. **Enterprise-Ready**: Full support for enterprise features
 6. **User-Friendly**: Helpful guidance and validation throughout
+7. **Troubleshooting-Friendly**: Clear paths for issue resolution
+8. **Monitoring-Capable**: Real-time performance and health tracking
 
-The flow diagrams provide a complete picture of the user journey, from initial setup through ongoing management, ensuring users can successfully deploy and manage SMB shares in their Proxmox environment. 
+The flow diagrams provide a complete picture of the user journey, from initial setup through ongoing management, ensuring users can successfully deploy and manage SMB shares in their Proxmox environment with confidence and efficiency. 
