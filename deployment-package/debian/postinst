@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+
+# Enable and start the metrics collection timer
+if [ -x /bin/systemctl ]; then
+    systemctl daemon-reload
+    systemctl enable pve-smbgateway-metrics.timer
+    systemctl start pve-smbgateway-metrics.timer
+fi
+
+# Create metrics database directory
+if [ ! -d /var/lib/pve/smbgateway ]; then
+    mkdir -p /var/lib/pve/smbgateway
+fi
+
+# Set proper permissions
+chown root:root /var/lib/pve/smbgateway
+chmod 755 /var/lib/pve/smbgateway
+
+exit 0 

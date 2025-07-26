@@ -1,0 +1,18 @@
+pve-plugin-smbgateway (0.1.0-1) stable; urgency=medium
+
+  * PVE SMB Gateway v0.1.0 - Alpha Release
+  * Core SMB Gateway functionality with LXC and Native modes
+  * Professional ExtJS wizard interface with validation
+  * CLI management tools with comprehensive commands
+  * Error handling and rollback system
+  * Basic quota management and enforcement
+  * VM mode template-based provisioning (alpha)
+  * Active Directory integration framework (alpha)
+  * High availability with CTDB clustering (alpha)
+  * Performance monitoring and metrics collection (alpha)
+  * Security hardening and validation (alpha)
+  * Comprehensive documentation and examples
+  * Dual licensing (AGPL-3.0 + Commercial)
+  * Production-ready core features for testing
+
+ -- Eric Henderson <eric@gozippy.com>  Wed, 23 Jul 2025 12:00:00 +0000
